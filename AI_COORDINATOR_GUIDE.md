@@ -203,8 +203,27 @@ Once verified, write:
 #### 4.3 — User comment on an entity
 
 - Fetch: `GET /api/comments?entity_type=X&entity_id=Y`
-- Reply via `POST /api/comments` with same `entity_type`/`entity_id`, `author='ai'`
-- For `entity_type='ai_chat'` — reply as comment in the same chat
+- Reply via `POST /api/comments` with same `entity_type`/`entity_id` and **mandatory `author: 'ai'`** in body
+- For `entity_type='ai_chat'` — reply as comment in the same chat with `author: 'ai'`
+
+**IMPORTANT — always set `author` when writing comments**:
+
+The `comments` table has an `author` column (default `'user'`). The frontend uses it to visually distinguish user questions from AI answers in the ai_chat UI. If you insert an AI response without `author='ai'`, it will appear in the UI as a user question — breaking the chat layout.
+
+```sql
+-- CORRECT (author='ai' explicitly set):
+INSERT INTO comments (entity_type, entity_id, text, author, patient_id)
+VALUES ('ai_chat', 0, 'your answer text', 'ai', 1);
+
+-- WRONG (author defaults to 'user' → answer renders as a question):
+INSERT INTO comments (entity_type, entity_id, text, patient_id)
+VALUES ('ai_chat', 0, 'your answer text', 1);
+```
+
+If you forgot and inserted without author, fix it:
+```sql
+UPDATE comments SET author='ai' WHERE id=<N> AND entity_type='ai_chat';
+```
 
 ### Step 5 — Cross-reference after each entity
 
