@@ -2,11 +2,13 @@
 
 <img src="docs/assets/hero.png" alt="Anamnesis" width="640" />
 
-# Anamnesis
+# Anamnesis (Free Serverless Fork)
 
-**AI-coordinated medical records tracker**
+**AI-coordinated medical records tracker running on free cloud infrastructure**
 
 **English** • [Русский](README.ru.md)
+
+[![Deploy Status](https://github.com/EdMuller1986/anamnesis/workflows/Deploy%20to%20Cloudflare/badge.svg)](https://github.com/EdMuller1986/anamnesis/actions)
 
 </div>
 
@@ -14,19 +16,58 @@
 
 > AI-coordinated medical records tracker — a personal health PWA where an AI assistant does the heavy lifting of data entry, structuring, and cross-referencing, while you just scan documents and talk to it in plain language.
 
-**Status**: early release. Functional, self-hosted, single-family scale.
+**Status**: Migration to free serverless infrastructure in progress.
 
-### Background
+## 🆓 Free Serverless Architecture
 
-The philosophy, motivation, and real findings behind this project are described in a long-form article by the author (in Russian):
+This is a fork of [Veta-one/anamnesis](https://github.com/Veta-one/anamnesis) migrated to run entirely on **free cloud services**:
 
-**→ [Как я построил медицинский трекер здоровья семьи с Claude AI в роли координатора](https://habr.com/ru/articles/1022450/)** *(Habr, 2026)*
+| Component | Original | This Fork | Free Tier |
+|-----------|----------|-----------|-----------|
+| **Backend** | Node.js + Express + VPS | **Cloudflare Workers** | 100,000 requests/day |
+| **Database** | SQLite on VPS disk | **Cloudflare D1** (SQLite) | 5 GB storage, 5M reads/day |
+| **File Storage** | Local disk + nginx | **Backblaze B2** | 10 GB free |
+| **Frontend Hosting** | VPS + nginx | **Cloudflare Pages** | Unlimited bandwidth |
+| **CI/CD** | Manual deploy | **GitHub Actions** | 2,000 minutes/month |
 
-If you want the "why" before the "how", read the article first. This README focuses on the "how".
+**Total cost: $0/month** for typical single-family usage.
+
+### Why This Fork?
+
+The original Anamnesis requires a VPS ($5-10/month) and manual deployment. This fork makes it:
+- ✅ **Completely free** for most users
+- ✅ **Zero-maintenance** (serverless auto-scaling)
+- ✅ **Git-based deployment** (push to deploy)
+- ✅ **Global CDN** (fast worldwide)
+- ✅ **Auto-backups** to B2
+
+### What's Been Migrated
+
+✅ **Completed:**
+- Backend framework: Express → **Hono** (optimized for Workers)
+- Database queries: PostgreSQL syntax → **SQLite/D1 bindings**
+- File uploads: Local storage → **Backblaze B2 S3-compatible API**
+- All API routes: `/api/diagnoses`, `/api/medications`, `/api/lab-results`, `/api/plan`, `/api/specialists`, `/api/timeline`, `/api/patient`, `/api/documents`
+- Security: Environment variable system for secrets
+- CI/CD: GitHub Actions workflow for automatic deployment
+- Documentation: Setup guides and migration plans
+
+🚧 **In Progress:**
+- Authentication routes (PIN, WebAuthn, sessions)
+- Admin tools (`/api/admin/tools/*`)
+- Full-text search (FTS5 in D1)
+- Dashboard and analytics endpoints
+- Frontend deployment to Cloudflare Pages
+
+📋 **Planned:**
+- D1 migrations automation
+- B2 lifecycle policies for old files
+- Edge caching optimization
+- Multi-region replication
 
 ---
 
-## What is this?
+## What is Anamnesis?
 
 Most medical trackers ask you to fill in dozens of fields by hand — diagnosis, dosage, reference ranges, anomaly flags, links between tests and visits. It is tedious and most people give up after a week.
 
@@ -37,13 +78,13 @@ The app is a minimal PWA that **shows** the data. The coordinator **maintains** 
 ## Who is this for?
 
 - Families with complex or ongoing medical situations (a child with multiple specialists, chronic conditions, frequent tests)
-- Developers comfortable with self-hosting (Node.js, SQLite, nginx)
+- Developers comfortable with serverless deployment (Cloudflare Workers, GitHub Actions)
 - People who already work with an AI assistant daily and want to extend that habit to their health records
-- Privacy-conscious users who don't want medical data in a SaaS cloud
+- Privacy-conscious users who don't want medical data in a SaaS cloud but also don't want to manage a VPS
 
 This is **not** for casual users looking for a one-tap wellness app.
 
-## Key features
+## Key Features
 
 ### For the user
 - **Dashboard** — aggregated stats, active diagnoses, current medications, upcoming reminders, AI summary
@@ -60,14 +101,15 @@ This is **not** for casual users looking for a one-tap wellness app.
 
 ### For the AI coordinator
 - HTTP API (`/api/admin/tools/*`) — `ai-review`, `integrity`, `orphan-check`, `impact`, `sql`, `search`, `changelog`, `mark-reviewed`, `since-last-review`, `backup-now`
-- Full-text search (FTS5 with Cyrillic support)
+- Full-text search (FTS5 with Cyrillic support in D1)
 - Strict data integrity checks (foreign keys, orphan detection, conflict resolution protocol)
 - Audit log with per-patient filtering — the AI can reason about what changed since last session
 
-### Technical
+### Technical Stack
 - **Frontend**: React 19, Vite 7, TypeScript strict, React Router 7 (data mode), TanStack Query 5, Motion, PWA with offline support (Workbox)
-- **Backend**: Node.js 22, Express, SQLite (WAL mode, foreign keys ON, FTS5), scrypt PIN hashing + WebAuthn biometry + device trust + server-side exponential backoff
-- **Deploy**: Git + systemd (non-root user) + nginx, optional Telegram notifications and offsite encrypted backups
+- **Backend**: Cloudflare Workers (Hono framework), D1 (SQLite), Backblaze B2 (S3-compatible storage)
+- **Auth**: scrypt PIN hashing + WebAuthn biometry + device trust + session management in D1
+- **Deploy**: GitHub Actions → Cloudflare Workers + Pages
 - **Multi-patient**: ready for up to 4 patients in one instance (per-patient data isolation, audit log, UI patient switcher)
 
 ## Model-agnostic AI coordinator
@@ -85,194 +127,210 @@ Clinical-reasoning tasks benefit from larger models. Routine data entry works fi
 
 ---
 
-## Getting started
+## Getting Started (Free Serverless Setup)
 
 ### 1. Prerequisites
 
-- Node.js ≥ 22
-- SQLite ≥ 3.35 (comes with better-sqlite3)
-- `poppler-utils` (for PDF → PNG previews) — `apt install poppler-utils` on Linux / `brew install poppler` on macOS
+- [Cloudflare account](https://dash.cloudflare.com/sign-up) (free tier)
+- [Backblaze B2 account](https://www.backblaze.com/b2/sign-up.html) (10 GB free)
+- [GitHub account](https://github.com/signup) (for CI/CD)
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) — `npm install -g wrangler`
 
-### 2. Clone and install
+### 2. Fork and Clone
 
 ```bash
-git clone https://github.com/Veta-one/anamnesis.git
+# Fork this repository on GitHub, then:
+git clone https://github.com/YOUR_USERNAME/anamnesis.git
 cd anamnesis
+```
 
-# Backend
+### 3. Backend Setup (Cloudflare Workers + D1)
+
+```bash
 cd backend
+
+# Install dependencies
 npm install
-cp ../.env.example .env
-# Edit .env — set APP_PIN, generate API_TOKEN, ADMIN_TOKEN, BACKUP_ENCRYPTION_KEY
-npm run init-db          # creates DB with a demo patient (Ivanov Ivan)
-npm start                # starts backend on port 3010
 
-# Frontend (new terminal)
-cd frontend
+# Login to Cloudflare
+wrangler login
+
+# Create D1 database
+wrangler d1 create anamnesis_db
+
+# Copy the database_id from output, then create your local config:
+cp wrangler.toml wrangler.toml.local
+# Edit wrangler.toml.local and paste your database_id
+
+# Run migrations
+wrangler d1 migrations apply anamnesis_db --local  # Test locally first
+wrangler d1 migrations apply anamnesis_db          # Then apply to production
+
+# Set B2 secrets
+wrangler secret put B2_APPLICATION_KEY
+# Paste your B2 application key when prompted
+```
+
+### 4. Backblaze B2 Setup
+
+1. Create a [Backblaze B2 bucket](https://www.backblaze.com/b2/cloud-storage.html)
+2. Create an application key with read/write permissions
+3. Update `backend/wrangler.toml.local`:
+   ```toml
+   [vars]
+   B2_BUCKET_NAME = "your-bucket-name"
+   B2_KEY_ID = "your-key-id"
+   B2_ENDPOINT = "s3.us-west-004.backblazeb2.com"  # Your region
+   ```
+
+### 5. Deploy Backend
+
+```bash
+# Deploy to Cloudflare Workers
+wrangler deploy --config wrangler.toml.local
+
+# Note the deployed URL (e.g., https://anamnesis-backend.your-subdomain.workers.dev)
+```
+
+### 6. Frontend Setup
+
+```bash
+cd ../frontend
+
+# Install dependencies
 npm install
-npm run dev              # opens http://localhost:5173 with proxy to backend
+
+# Create local environment config
+cp .env.example .env.local
+
+# Edit .env.local and set your Workers URL:
+# VITE_API_URL=https://anamnesis-backend.your-subdomain.workers.dev/api
 ```
 
-You should now see a demo patient (Ivanov Ivan Ivanovich) with one example entry per section. This is the **starter state** — all UI screens work, you can tap around and learn the interface.
+### 7. Deploy Frontend (Cloudflare Pages)
 
-### 3. Replace the demo patient with your own
+```bash
+# Build for production
+npm run build
 
-Once you want to start using it for real, connect your AI coordinator (see setup guides above), then ask it to replace the demo patient with yours:
+# Deploy to Cloudflare Pages
+npx wrangler pages deploy dist --project-name anamnesis
 
-```
-Hi. This is a fresh Anamnesis instance. The DB has a demo patient
-(Ivanov Ivan Ivanovich, patient_id=1). Delete everything for patient_id=1
-and create a new patient:
-- Full name: <your name>
-- Date of birth: YYYY-MM-DD
-- Gender: M/F
-
-Then I'll start sending you documents.
+# Or set up automatic deployment via GitHub integration:
+# https://developers.cloudflare.com/pages/get-started/git-integration/
 ```
 
-The coordinator will wrap this in a transaction, wipe the demo data, create your patient, and you are ready.
+### 8. GitHub Actions (Optional - Automatic Deployment)
 
-### 4. Production deploy (optional)
+1. Go to your GitHub repository → Settings → Secrets and variables → Actions
+2. Add these secrets:
+   - `CLOUDFLARE_API_TOKEN` (from Cloudflare dashboard)
+   - `CLOUDFLARE_ACCOUNT_ID` (from Cloudflare dashboard)
+3. Push to `master` branch to trigger automatic deployment
 
-See [`DEPLOY.md`](DEPLOY.md) for a self-hosted production setup (Ubuntu VPS + nginx + Let's Encrypt + systemd hardening + UFW + fail2ban + Telegram-backed offsite backups).
+**Full setup guide**: See [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)
 
 ---
 
-## Project structure
+## Development
+
+### Local Development
+
+```bash
+# Backend (with local D1)
+cd backend
+npm run dev  # Runs on http://localhost:8787
+
+# Frontend (with Vite proxy)
+cd frontend
+npm run dev  # Runs on http://localhost:5173
+```
+
+The frontend proxy will forward `/api/*` requests to your local Workers instance.
+
+### Project Structure
 
 ```
 anamnesis/
-├── README.md                   This file
-├── LICENSE                     MIT + medical disclaimer
-├── DEPLOY.md                   Self-hosted production guide
-├── AI_COORDINATOR_GUIDE.md     Protocol the AI follows
-├── .env.example                Environment template
-│
-├── backend/                    Node.js + Express + SQLite
-│   ├── package.json
+├── backend/                    Cloudflare Workers + D1
 │   ├── src/
-│   │   ├── index.js            Entry: CORS, rate limits, auth
-│   │   ├── db.js               Schema + migrations + audit triggers + FTS5
-│   │   ├── init-db.js          Demo patient seed
-│   │   ├── middleware/         auth, audit, patientId, validate
-│   │   ├── routes/             API endpoints
-│   │   └── services/           backup, telegram, scheduler, changelog, auth-session
-│   │
-│   ├── data/                   [gitignored] SQLite DB + backups
-│   └── uploads/                [gitignored] Patient documents and photos
+│   │   ├── index.js           Main Hono app
+│   │   ├── routes/            API endpoints
+│   │   ├── services/          B2 storage, auth, etc.
+│   │   └── middleware/        Auth, validation
+│   ├── migrations/            D1 schema migrations
+│   ├── wrangler.toml          Template (placeholders)
+│   ├── wrangler.toml.local    Your config (gitignored)
+│   └── CONFIG.md              Setup instructions
 │
-├── frontend/                   React 19 PWA
+├── frontend/                   React PWA
 │   ├── src/
-│   │   ├── app/                router, providers, query client
-│   │   ├── shared/             UI primitives, auth, hooks, layout, utils
-│   │   └── features/           dashboard, plan, errors, documents, diagnoses, more
-│   └── public/                 PWA manifest, icons
+│   │   ├── app/               Router, providers
+│   │   ├── shared/            UI primitives, auth, API client
+│   │   └── features/          Dashboard, plan, documents, etc.
+│   ├── .env.example           Template
+│   └── .env.local             Your config (gitignored)
 │
-└── docs/                       Additional documentation
-    ├── setup/                  Per-provider AI setup guides
-    └── AI_COORDINATOR_GUIDE.md
+├── docs/
+│   ├── ENVIRONMENT.md         Configuration guide
+│   ├── MIGRATION_PLAN.md      Migration roadmap
+│   └── TESTING_PLAN.md        Testing strategy
+│
+└── .github/workflows/
+    └── cloudflare.yml         CI/CD pipeline
 ```
 
-## API
+---
 
-Overview (for developers wiring up a coordinator):
+## Migration Status & Roadmap
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/auth/login` | PIN login → session token |
-| POST | `/api/auth/verify-device` | Security challenge for new device |
-| GET | `/api/dashboard` | Aggregated summary |
-| GET/POST/PUT/DELETE | `/api/diagnoses` | Diagnoses |
-| GET/POST/PUT/DELETE | `/api/medications` | Medications |
-| GET/POST/PUT/DELETE | `/api/timeline` | Doctor visits / timeline |
-| GET/POST/PUT/DELETE | `/api/documents` | Documents (multipart upload) |
-| GET/POST/PUT/DELETE | `/api/plan` | Treatment plan |
-| GET/POST/PUT/DELETE | `/api/errors` | Medical errors |
-| GET/POST/PUT/DELETE | `/api/lab-results` | Lab results |
-| GET | `/api/search?q=...` | FTS5 search |
-| GET | `/api/patient-context` | Full patient snapshot (for AI) |
-| GET | `/api/history` | Automatic per-patient changelog |
-| POST | `/api/admin/tools/sql` | Arbitrary SQL (ADMIN_TOKEN required) |
-| GET | `/api/admin/tools/ai-review` | Session readiness check |
-| GET | `/api/admin/tools/integrity` | Integrity check + FK violations + FTS |
-| GET | `/api/admin/tools/orphan-check` | Entities without source document |
-| GET | `/api/admin/tools/impact` | Dry-run deletion impact |
-| POST | `/api/admin/tools/backup-now` | Trigger backup |
+See [`docs/MIGRATION_PLAN.md`](docs/MIGRATION_PLAN.md) for detailed migration roadmap.
 
-Full API is documented in `AI_COORDINATOR_GUIDE.md`.
-
-## Security model
-
-- **6-digit PIN** (scrypt-hashed) for login
-- **WebAuthn biometry** (Face ID / Touch ID / Windows Hello) as fast-path after first PIN login
-- **Device trust**: new devices require a security word (registered during first-run setup)
-- **Server-side exponential backoff**: 3 failures → 1 min lockout → 2 min → 4 min → ... capped at 24 h
-- **Sessions in SQLite** (14-day sliding expiry, IP + UA tracking, revocation)
-- **Rate limits**: 20 req/15min on auth, 60 req/min on admin SQL, 1000 req/15min on general API
-- **Strict file upload validation**: MIME whitelist + double extension check, SVG rejected, 50 MB max
-- **AES-256-CBC / PBKDF2** encryption for daily backup archives
-- **Systemd hardening** (non-root user, ProtectSystem, ProtectKernel*, RestrictSUIDSGID, etc.)
-
-See `DEPLOY.md` for the full hardening guide.
+See [`docs/TESTING_PLAN.md`](docs/TESTING_PLAN.md) for testing strategy.
 
 ## Contributing
 
-PRs welcome for: bug fixes, new UI features, additional AI provider setup guides, translations, accessibility improvements. Please open an issue first for larger changes so we can align on direction.
+PRs welcome for:
+- Migration of remaining endpoints
+- Bug fixes in migrated code
+- Performance optimizations for Workers/D1
+- Documentation improvements
+- Testing infrastructure
 
-Not accepted: features that change the core model (e.g. "make it cloud-hosted", "add social sharing") — those belong in a fork.
+Please open an issue first for larger changes.
+
+## Differences from Original
+
+This fork maintains feature parity with [Veta-one/anamnesis](https://github.com/Veta-one/anamnesis) but runs on different infrastructure:
+
+| Aspect | Original | This Fork |
+|--------|----------|-----------|
+| Backend runtime | Node.js 22 | Cloudflare Workers (V8 isolates) |
+| HTTP framework | Express | Hono |
+| Database | SQLite on disk | Cloudflare D1 (distributed SQLite) |
+| File storage | Local filesystem | Backblaze B2 (S3-compatible) |
+| Deployment | VPS + systemd + nginx | Serverless (Workers + Pages) |
+| Cost | $5-10/month | $0/month (free tiers) |
+| Scaling | Manual | Automatic |
+| Backups | Custom scripts + Telegram | B2 lifecycle policies |
+
+**Philosophy**: Same UX, same AI coordinator protocol, zero hosting cost.
+
+## Credits
+
+Original project by [Veta-one](https://github.com/Veta-one).
+
+Serverless migration by [EdMuller1986](https://github.com/EdMuller1986).
 
 ## License
 
 MIT, see [LICENSE](LICENSE). Not a medical device.
 
-## Screenshots
+## Links
 
-These screenshots come from the author's real instance and are reused here with permission. The same UI renders on any instance — the data you see is specific to that family, but the structure and interactions are identical for everyone.
-
-### Dashboard — overview with AI summary
-Stats, active diagnoses, current medications, critical errors, upcoming reminders, AI-generated summary. Red = priorities, orange = to monitor, blue = context.
-<p align="center"><img src="docs/assets/dashboard.jpg" alt="Dashboard" width="900" /></p>
-
-### Plan & Errors
-Treatment and examination plan with priorities (urgent / important / routine). Medical errors and anomalies surfaced by AI after cross-referencing.
-<p align="center"><img src="docs/assets/plan-and-errors.jpg" alt="Plan and errors" width="900" /></p>
-
-### Health graph — relationships
-Cytoscape-powered graph of connections between diagnoses, doctors, medications, tests, and visits. Click a node to drill down.
-<p align="center"><img src="docs/assets/health-graph.jpg" alt="Health graph" width="900" /></p>
-
-### Visits & documents
-Chronology of doctor appointments, each with attached documents (PDFs, scans), audio transcriptions, and AI analysis of the specialist's performance.
-<p align="center"><img src="docs/assets/visits.jpg" alt="Visits timeline" width="900" /></p>
-
-### Visit transcription + AI analysis
-Raw transcription pasted from NotebookLM, AI's structured analysis of the visit (doctor's competence, completeness, adherence to guidelines), user comments.
-<p align="center"><img src="docs/assets/transcription.jpg" alt="Transcription + AI analysis" width="900" /></p>
-
-### Create visit form
-Structured entry for a new visit with specialist picker, document upload, NotebookLM transcription slot.
-<p align="center"><img src="docs/assets/visit-form.jpg" alt="Create visit form" width="900" /></p>
-
-### Lab results — grouped by test
-Test panels grouped by name + date, with expiry badges (how fresh the result is), anomaly counts, drill-down to individual parameters with reference ranges.
-<p align="center"><img src="docs/assets/lab-results.jpg" alt="Lab results" width="900" /></p>
-
-### Change history — automatic per-patient
-Every edit — by user or by AI — is captured via 40 SQLite triggers into `audit_log` and rendered as a human-readable feed. Tap a card to jump to the source entity.
-<p align="center"><img src="docs/assets/change-history.jpg" alt="Change history" width="900" /></p>
-
-### Security — multi-factor auth
-Face ID / Touch ID / Windows Hello (WebAuthn), PIN, trusted devices list with last-active and IP, security question for new-device flow, one-click "log out everywhere except this".
-<p align="center"><img src="docs/assets/security.jpg" alt="Security panel" width="900" /></p>
-
-### Backups — three-tier strategy
-Hot snapshots every 6h + encrypted daily archives (AES-256-CBC / PBKDF2) + offsite copy to Telegram. Works offline-resilient; survives VPS loss.
-<p align="center"><img src="docs/assets/backups-telegram.jpg" alt="Backup strategy" width="900" /></p>
-
-### Beyond pediatrics — multi-patient checkup plan
-The same system scales to adults. Here: a comprehensive checkup plan generated for the author after cross-referencing age-appropriate screening guidelines.
-<p align="center"><img src="docs/assets/adult-checkup-plan.jpg" alt="Adult checkup plan" width="900" /></p>
-
-## Author
-
-Built by [Veta-one](https://github.com/Veta-one). Follow on Telegram: [@VETA14](https://t.me/VETA14).
+- **Original repository**: https://github.com/Veta-one/anamnesis
+- **Original author's article** (Russian): [Habr](https://habr.com/ru/articles/1022450/)
+- **This fork**: https://github.com/EdMuller1986/anamnesis
+- **Cloudflare Workers docs**: https://developers.cloudflare.com/workers/
+- **Cloudflare D1 docs**: https://developers.cloudflare.com/d1/
+- **Backblaze B2 docs**: https://www.backblaze.com/b2/docs/
