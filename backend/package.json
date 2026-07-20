@@ -1,22 +1,20 @@
 {
   "name": "anamnesis-backend",
   "version": "0.1.0",
-  "description": "Anamnesis backend — Node.js + Express + SQLite (WAL, FTS5, audit triggers)",
+  "description": "Anamnesis backend — Cloudflare Worker (Hono + D1 + R2)",
   "main": "src/index.js",
+  "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
-    "init-db": "node src/init-db.js"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types"
   },
   "dependencies": {
-    "@simplewebauthn/server": "^11.0.0",
-    "better-sqlite3": "^11.7.0",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.1",
-    "express-rate-limit": "^7.5.1",
-    "multer": "^1.4.5-lts.1",
-    "node-cron": "^3.0.3",
-    "uuid": "^11.0.3"
+    "@aws-sdk/client-s3": "^3.1090.0",
+    "@aws-sdk/s3-request-presigner": "^3.1090.0",
+    "hono": "^4.2.7"
+  },
+  "devDependencies": {
+    "wrangler": "^4.112.0"
   }
 }
