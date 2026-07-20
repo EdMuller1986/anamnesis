@@ -1,135 +1,75 @@
-const { Router } = require('express');
-const pool = require('../db');
-const { rawDb } = require('../db');
-const { validate, required, isIn } = require('../middleware/validate');
+import { Hono } from 'hono';
 
-const router = Router();
+const plan = new Hono();
 
-// GET /api/plan
-router.get('/', async (req, res) => {
-  try {
-    const { status, priority } = req.query;
-    const conditions = ['patient_id = $1'];
-    const params = [req.patientId];
-    let paramIndex = 2;
+plan.get('/', async (c) => {
+  const patientId = c.get('patientId');
+  const { status, priority } = c.req.query();
+  let query = 'SELECT * FROM plan WHERE patient_id = ?';
+  const params = [patientId];
 
-    if (status) {
-      conditions.push(`status = $${paramIndex++}`);
-      params.push(status);
-    }
-    if (priority) {
-      conditions.push(`priority = $${paramIndex++}`);
-      params.push(priority);
-    }
-
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const query = `SELECT * FROM plan ${where} ORDER BY sort_order ASC, created_at DESC`;
-
-    const { rows } = await pool.query(query, params);
-    res.json(rows);
-  } catch (err) {
-    console.error('Ошибка получения плана:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  if (status) {
+    query += ' AND status = ?';
+    params.push(status);
   }
+  if (priority) {
+    query += ' AND priority = ?';
+    params.push(priority);
+  }
+
+  query += ' ORDER BY created_at DESC';
+
+  const { results } = await c.env.DB.prepare(query).bind(...params).all();
+  return c.json(results);
 });
 
-// GET /api/plan/:id
-router.get('/:id', async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM plan WHERE id = $1', [req.params.id]);
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Элемент плана не найден' });
-    }
-    res.json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка получения элемента плана:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+plan.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const result = await c.env.DB.prepare('SELECT * FROM plan WHERE id = ?').bind(id).first();
+  if (!result) return c.json({ error: 'Not found' }, 404);
+  return c.json(result);
 });
 
-// POST /api/plan
-router.post('/',
-  validate(
-    required('title'),
-    isIn('priority', ['urgent', 'high', 'medium']),
-    isIn('status', ['pending', 'in_progress', 'done'])
-  ),
-  async (req, res) => {
-  try {
-    const { title, description, status, priority, due_date, sort_order, notes, outcome } = req.body;
-    const completed_at = (status === 'done') ? new Date().toISOString() : null;
-    const { rows } = await pool.query(
-      `INSERT INTO plan (title, description, status, priority, due_date, sort_order, notes, outcome, completed_at, patient_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING *`,
-      [title, description, status || 'pending', priority || 'medium', due_date, sort_order || 0, notes, outcome || null, completed_at, req.patientId]
-    );
-    res.status(201).json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка создания элемента плана:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+plan.post('/', async (c) => {
+  const patientId = c.get('patientId');
+  const body = await c.req.json();
+  const { title, detail, status, priority, due_date } = body;
+
+  if (!title) return c.json({ error: 'Title is required' }, 400);
+
+  const completed_at = (status === 'done') ? new Date().toISOString() : null;
+
+  const { results } = await c.env.DB.prepare(`
+    INSERT INTO plan (title, detail, status, priority, due_date, completed_at, patient_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    RETURNING *
+  `).bind(title, detail, status || 'pending', priority || 'medium', due_date, completed_at, patientId).all();
+
+  return c.json(results[0], 201);
 });
 
-// PUT /api/plan/reorder — пакетное обновление sort_order
-router.put('/reorder', async (req, res) => {
-  try {
-    const { items } = req.body; // [{ id, sort_order }, ...]
-    if (!Array.isArray(items)) {
-      return res.status(400).json({ error: 'Поле items должно быть массивом' });
-    }
+plan.put('/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const { title, detail, status, priority, due_date, outcome } = body;
 
-    const reorder = rawDb.transaction((items) => {
-      const stmt = rawDb.prepare("UPDATE plan SET sort_order = ?, updated_at = datetime('now') WHERE id = ?");
-      for (const item of items) {
-        stmt.run(item.sort_order, item.id);
-      }
-    });
-    reorder(items);
+  const completed_at = (status === 'done') ? new Date().toISOString() : null;
 
-    res.json({ message: 'Порядок обновлён' });
-  } catch (err) {
-    console.error('Ошибка обновления порядка:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+  const { results } = await c.env.DB.prepare(`
+    UPDATE plan
+    SET title = ?, detail = ?, status = ?, priority = ?, due_date = ?, outcome = ?, completed_at = ?
+    WHERE id = ?
+    RETURNING *
+  `).bind(title, detail, status, priority, due_date, outcome || null, completed_at, id).all();
+
+  if (results.length === 0) return c.json({ error: 'Not found' }, 404);
+  return c.json(results[0]);
 });
 
-// PUT /api/plan/:id
-router.put('/:id', async (req, res) => {
-  try {
-    const { title, description, status, priority, due_date, sort_order, notes, outcome } = req.body;
-    const completed_at = (status === 'done') ? new Date().toISOString() : null;
-    const { rows } = await pool.query(
-      `UPDATE plan
-       SET title = $1, description = $2, status = $3, priority = $4,
-           due_date = $5, sort_order = $6, notes = $7, outcome = $8,
-           completed_at = $9, updated_at = NOW()
-       WHERE id = $10
-       RETURNING *`,
-      [title, description, status, priority, due_date, sort_order, notes, outcome || null, completed_at, req.params.id]
-    );
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Элемент плана не найден' });
-    }
-    res.json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка обновления элемента плана:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+plan.delete('/:id', async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM plan WHERE id = ?').bind(id).run();
+  return c.json({ message: 'Deleted' });
 });
 
-// DELETE /api/plan/:id
-router.delete('/:id', async (req, res) => {
-  try {
-    const { rowCount } = await pool.query('DELETE FROM plan WHERE id = $1', [req.params.id]);
-    if (rowCount === 0) {
-      return res.status(404).json({ error: 'Элемент плана не найден' });
-    }
-    res.json({ message: 'Элемент плана удалён' });
-  } catch (err) {
-    console.error('Ошибка удаления элемента плана:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
-});
-
-module.exports = router;
+export default plan;

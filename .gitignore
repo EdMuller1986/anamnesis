@@ -4,6 +4,12 @@ node_modules/
 # Env
 .env
 .env.local
+.env.save
+
+# Local configuration with real secrets
+*.local
+wrangler.toml.local
+_redirects.local
 
 # Build output
 frontend/dist/

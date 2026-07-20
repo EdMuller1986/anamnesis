@@ -4,6 +4,8 @@ import { secureHeaders } from 'hono/secure-headers';
 import { getCookie } from 'hono/cookie';
 import * as authSession from './services/auth-session';
 import documents from './routes/documents';
+import patient from './routes/patient';
+import timeline from './routes/timeline';
 
 const app = new Hono();
 
@@ -24,10 +26,22 @@ const getMeta = (c) => ({
 
 // Auth Middleware
 const authMiddleware = async (c, next) => {
-  const skipPaths = ['/api/auth/login', '/api/health'];
-  if (skipPaths.includes(c.req.path)) return await next();
+  const path = c.req.path;
+  const skipPaths = [
+    '/api/auth/login',
+    '/api/auth/check',
+    '/api/health',
+    '/api/webauthn/available',
+    '/api/webauthn/login/options',
+    '/api/webauthn/login/verify'
+  ];
 
-  const token = c.req.header('Authorization')?.replace('Bearer ', '') || getCookie(c, 'session');
+  if (skipPaths.some(p => path === p)) return await next();
+
+  const token = c.req.header('X-Session-Token') || 
+                c.req.header('Authorization')?.replace('Bearer ', '') || 
+                getCookie(c, 'session');
+
   if (!token) return c.json({ error: 'Unauthorized' }, 401);
 
   const session = await authSession.getSession(c.env.DB, token);
@@ -89,5 +103,7 @@ app.post('/api/auth/login', async (c) => {
 
 // Mount other routes
 app.route('/api/documents', documents);
+app.route('/api/patient', patient);
+app.route('/api/timeline', timeline);
 
 export default app;

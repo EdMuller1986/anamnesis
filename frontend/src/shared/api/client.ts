@@ -23,7 +23,9 @@ import { getSession } from '@/shared/auth/session';
  * ```
  */
 
-const BASE = '/api';
+// In development, Vite proxy forwards /api to backend (see vite.config.ts)
+// In production, use VITE_API_URL from environment or fall back to relative path
+const BASE = import.meta.env.VITE_API_URL || '/api';
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 

@@ -1,94 +1,65 @@
-const { Router } = require('express');
-const pool = require('../db');
-const { validate, required } = require('../middleware/validate');
+import { Hono } from 'hono';
 
-const router = Router();
+const diagnoses = new Hono();
 
-// GET /api/diagnoses
-router.get('/', async (req, res) => {
-  try {
-    const { status } = req.query;
-    let query = 'SELECT * FROM diagnoses WHERE patient_id = $1 ORDER BY created_at DESC';
-    const params = [req.patientId];
+diagnoses.get('/', async (c) => {
+  const patientId = c.get('patientId');
+  const { status } = c.req.query();
+  let query = 'SELECT * FROM diagnoses WHERE patient_id = ? ORDER BY created_at DESC';
+  const params = [patientId];
 
-    if (status) {
-      query = 'SELECT * FROM diagnoses WHERE patient_id = $1 AND status = $2 ORDER BY created_at DESC';
-      params.push(status);
-    }
-
-    const { rows } = await pool.query(query, params);
-    res.json(rows);
-  } catch (err) {
-    console.error('Ошибка получения диагнозов:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  if (status) {
+    query = 'SELECT * FROM diagnoses WHERE patient_id = ? AND status = ? ORDER BY created_at DESC';
+    params.push(status);
   }
+
+  const { results } = await c.env.DB.prepare(query).bind(...params).all();
+  return c.json(results);
 });
 
-// GET /api/diagnoses/:id
-router.get('/:id', async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM diagnoses WHERE id = $1', [req.params.id]);
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Диагноз не найден' });
-    }
-    res.json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка получения диагноза:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+diagnoses.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const result = await c.env.DB.prepare('SELECT * FROM diagnoses WHERE id = ?').bind(id).first();
+  if (!result) return c.json({ error: 'Not found' }, 404);
+  return c.json(result);
 });
 
-// POST /api/diagnoses
-router.post('/', validate(required('name')), async (req, res) => {
-  try {
-    const { name, icd_code, status, diagnosed_date, notes } = req.body;
-    const { rows } = await pool.query(
-      `INSERT INTO diagnoses (name, icd_code, status, diagnosed_date, notes, patient_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
-      [name, icd_code, status || 'active', diagnosed_date, notes, req.patientId]
-    );
-    res.status(201).json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка создания диагноза:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+diagnoses.post('/', async (c) => {
+  const patientId = c.get('patientId');
+  const body = await c.req.json();
+  const { name, icd_code, status, detail } = body;
+
+  if (!name) return c.json({ error: 'Name is required' }, 400);
+
+  const { results } = await c.env.DB.prepare(`
+    INSERT INTO diagnoses (name, icd_code, status, detail, patient_id)
+    VALUES (?, ?, ?, ?, ?)
+    RETURNING *
+  `).bind(name, icd_code, status || 'active', detail, patientId).all();
+
+  return c.json(results[0], 201);
 });
 
-// PUT /api/diagnoses/:id
-router.put('/:id', async (req, res) => {
-  try {
-    const { name, icd_code, status, diagnosed_date, notes } = req.body;
-    const { rows } = await pool.query(
-      `UPDATE diagnoses
-       SET name = $1, icd_code = $2, status = $3, diagnosed_date = $4,
-           notes = $5, updated_at = NOW()
-       WHERE id = $6
-       RETURNING *`,
-      [name, icd_code, status, diagnosed_date, notes, req.params.id]
-    );
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Диагноз не найден' });
-    }
-    res.json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка обновления диагноза:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+diagnoses.put('/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const { name, icd_code, status, detail } = body;
+
+  const { results } = await c.env.DB.prepare(`
+    UPDATE diagnoses
+    SET name = ?, icd_code = ?, status = ?, detail = ?
+    WHERE id = ?
+    RETURNING *
+  `).bind(name, icd_code, status, detail, id).all();
+
+  if (results.length === 0) return c.json({ error: 'Not found' }, 404);
+  return c.json(results[0]);
 });
 
-// DELETE /api/diagnoses/:id
-router.delete('/:id', async (req, res) => {
-  try {
-    const { rowCount } = await pool.query('DELETE FROM diagnoses WHERE id = $1', [req.params.id]);
-    if (rowCount === 0) {
-      return res.status(404).json({ error: 'Диагноз не найден' });
-    }
-    res.json({ message: 'Диагноз удалён' });
-  } catch (err) {
-    console.error('Ошибка удаления диагноза:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+diagnoses.delete('/:id', async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM diagnoses WHERE id = ?').bind(id).run();
+  return c.json({ message: 'Deleted' });
 });
 
-module.exports = router;
+export default diagnoses;

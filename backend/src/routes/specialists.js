@@ -1,93 +1,58 @@
-const { Router } = require('express');
-const pool = require('../db');
+import { Hono } from 'hono';
 
-const router = Router();
+const specialists = new Hono();
 
-// GET /api/specialists
-router.get('/', async (req, res) => {
-  try {
-    const { status } = req.query;
-    let query = 'SELECT * FROM specialists WHERE patient_id = $1 ORDER BY created_at DESC';
-    const params = [req.patientId];
-
-    if (status) {
-      query = 'SELECT * FROM specialists WHERE patient_id = $1 AND status = $2 ORDER BY created_at DESC';
-      params.push(status);
-    }
-
-    const { rows } = await pool.query(query, params);
-    res.json(rows);
-  } catch (err) {
-    console.error('Ошибка получения специалистов:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+specialists.get('/', async (c) => {
+  const patientId = c.get('patientId');
+  const { results } = await c.env.DB.prepare(
+    'SELECT * FROM specialists WHERE patient_id = ? ORDER BY full_name ASC'
+  ).bind(patientId).all();
+  return c.json(results);
 });
 
-// GET /api/specialists/:id
-router.get('/:id', async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM specialists WHERE id = $1', [req.params.id]);
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Специалист не найден' });
-    }
-    res.json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка получения специалиста:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+specialists.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const result = await c.env.DB.prepare('SELECT * FROM specialists WHERE id = ?').bind(id).first();
+  if (!result) return c.json({ error: 'Not found' }, 404);
+  return c.json(result);
 });
 
-// POST /api/specialists
-router.post('/', async (req, res) => {
-  try {
-    const { full_name, specialization, clinic, phone, email, status, notes } = req.body;
-    const { rows } = await pool.query(
-      `INSERT INTO specialists (full_name, specialization, clinic, phone, email, status, notes, patient_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [full_name, specialization, clinic, phone, email, status || 'active', notes, req.patientId]
-    );
-    res.status(201).json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка создания специалиста:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+specialists.post('/', async (c) => {
+  const patientId = c.get('patientId');
+  const body = await c.req.json();
+  const { full_name, specialization, clinic, contact_info, notes } = body;
+
+  if (!full_name) return c.json({ error: 'Full name is required' }, 400);
+
+  const { results } = await c.env.DB.prepare(`
+    INSERT INTO specialists (full_name, specialization, clinic, contact_info, notes, patient_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+    RETURNING *
+  `).bind(full_name, specialization, clinic, contact_info, notes, patientId).all();
+
+  return c.json(results[0], 201);
 });
 
-// PUT /api/specialists/:id
-router.put('/:id', async (req, res) => {
-  try {
-    const { full_name, specialization, clinic, phone, email, status, notes } = req.body;
-    const { rows } = await pool.query(
-      `UPDATE specialists
-       SET full_name = $1, specialization = $2, clinic = $3, phone = $4,
-           email = $5, status = $6, notes = $7, updated_at = NOW()
-       WHERE id = $8
-       RETURNING *`,
-      [full_name, specialization, clinic, phone, email, status, notes, req.params.id]
-    );
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Специалист не найден' });
-    }
-    res.json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка обновления специалиста:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+specialists.put('/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const { full_name, specialization, clinic, contact_info, notes } = body;
+
+  const { results } = await c.env.DB.prepare(`
+    UPDATE specialists
+    SET full_name = ?, specialization = ?, clinic = ?, contact_info = ?, notes = ?
+    WHERE id = ?
+    RETURNING *
+  `).bind(full_name, specialization, clinic, contact_info, notes, id).all();
+
+  if (results.length === 0) return c.json({ error: 'Not found' }, 404);
+  return c.json(results[0]);
 });
 
-// DELETE /api/specialists/:id
-router.delete('/:id', async (req, res) => {
-  try {
-    const { rowCount } = await pool.query('DELETE FROM specialists WHERE id = $1', [req.params.id]);
-    if (rowCount === 0) {
-      return res.status(404).json({ error: 'Специалист не найден' });
-    }
-    res.json({ message: 'Специалист удалён' });
-  } catch (err) {
-    console.error('Ошибка удаления специалиста:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+specialists.delete('/:id', async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM specialists WHERE id = ?').bind(id).run();
+  return c.json({ message: 'Deleted' });
 });
 
-module.exports = router;
+export default specialists;
