@@ -27,7 +27,8 @@ medications.get('/', async (c) => {
 
 medications.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const result = await c.env.DB.prepare('SELECT * FROM medications WHERE id = ?').bind(id).first();
+  const patientId = c.get('patientId');
+  const result = await c.env.DB.prepare('SELECT * FROM medications WHERE id = ? AND patient_id = ?').bind(id, patientId).first();
   if (!result) return c.json({ error: 'Not found' }, 404);
   return c.json(result);
 });
@@ -50,15 +51,16 @@ medications.post('/', async (c) => {
 
 medications.put('/:id', async (c) => {
   const id = c.req.param('id');
+  const patientId = c.get('patientId');
   const body = await c.req.json();
   const { name, dosage, frequency, status, specialist_id, detail } = body;
 
   const { results } = await c.env.DB.prepare(`
     UPDATE medications
     SET name = ?, dosage = ?, frequency = ?, status = ?, specialist_id = ?, detail = ?
-    WHERE id = ?
+    WHERE id = ? AND patient_id = ?
     RETURNING *
-  `).bind(name, dosage, frequency, status, specialist_id || null, detail, id).all();
+  `).bind(name, dosage, frequency, status, specialist_id || null, detail, id, patientId).all();
 
   if (results.length === 0) return c.json({ error: 'Not found' }, 404);
   return c.json(results[0]);
@@ -66,7 +68,8 @@ medications.put('/:id', async (c) => {
 
 medications.delete('/:id', async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM medications WHERE id = ?').bind(id).run();
+  const patientId = c.get('patientId');
+  await c.env.DB.prepare('DELETE FROM medications WHERE id = ? AND patient_id = ?').bind(id, patientId).run();
   return c.json({ message: 'Deleted' });
 });
 

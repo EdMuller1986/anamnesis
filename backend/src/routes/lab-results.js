@@ -27,7 +27,8 @@ labResults.get('/', async (c) => {
 
 labResults.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const result = await c.env.DB.prepare('SELECT * FROM lab_results WHERE id = ?').bind(id).first();
+  const patientId = c.get('patientId');
+  const result = await c.env.DB.prepare('SELECT * FROM lab_results WHERE id = ? AND patient_id = ?').bind(id, patientId).first();
   if (!result) return c.json({ error: 'Not found' }, 404);
   return c.json(result);
 });
@@ -52,15 +53,16 @@ labResults.post('/', async (c) => {
 
 labResults.put('/:id', async (c) => {
   const id = c.req.param('id');
+  const patientId = c.get('patientId');
   const body = await c.req.json();
   const { test_date, test_name, parameter, value, unit, ref_min, ref_max, status, timeline_id, specialist_id, notes } = body;
 
   const { results } = await c.env.DB.prepare(`
     UPDATE lab_results
     SET test_date = ?, test_name = ?, parameter = ?, value = ?, unit = ?, ref_min = ?, ref_max = ?, status = ?, timeline_id = ?, specialist_id = ?, notes = ?
-    WHERE id = ?
+    WHERE id = ? AND patient_id = ?
     RETURNING *
-  `).bind(test_date, test_name, parameter, value, unit, ref_min, ref_max, status, timeline_id, specialist_id || null, notes, id).all();
+  `).bind(test_date, test_name, parameter, value, unit, ref_min, ref_max, status, timeline_id, specialist_id || null, notes, id, patientId).all();
 
   if (results.length === 0) return c.json({ error: 'Not found' }, 404);
   return c.json(results[0]);
@@ -68,7 +70,8 @@ labResults.put('/:id', async (c) => {
 
 labResults.delete('/:id', async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM lab_results WHERE id = ?').bind(id).run();
+  const patientId = c.get('patientId');
+  await c.env.DB.prepare('DELETE FROM lab_results WHERE id = ? AND patient_id = ?').bind(id, patientId).run();
   return c.json({ message: 'Deleted' });
 });
 

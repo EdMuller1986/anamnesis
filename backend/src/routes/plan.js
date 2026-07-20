@@ -25,7 +25,8 @@ plan.get('/', async (c) => {
 
 plan.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const result = await c.env.DB.prepare('SELECT * FROM plan WHERE id = ?').bind(id).first();
+  const patientId = c.get('patientId');
+  const result = await c.env.DB.prepare('SELECT * FROM plan WHERE id = ? AND patient_id = ?').bind(id, patientId).first();
   if (!result) return c.json({ error: 'Not found' }, 404);
   return c.json(result);
 });
@@ -50,6 +51,7 @@ plan.post('/', async (c) => {
 
 plan.put('/:id', async (c) => {
   const id = c.req.param('id');
+  const patientId = c.get('patientId');
   const body = await c.req.json();
   const { title, detail, status, priority, due_date, outcome } = body;
 
@@ -58,9 +60,9 @@ plan.put('/:id', async (c) => {
   const { results } = await c.env.DB.prepare(`
     UPDATE plan
     SET title = ?, detail = ?, status = ?, priority = ?, due_date = ?, outcome = ?, completed_at = ?
-    WHERE id = ?
+    WHERE id = ? AND patient_id = ?
     RETURNING *
-  `).bind(title, detail, status, priority, due_date, outcome || null, completed_at, id).all();
+  `).bind(title, detail, status, priority, due_date, outcome || null, completed_at, id, patientId).all();
 
   if (results.length === 0) return c.json({ error: 'Not found' }, 404);
   return c.json(results[0]);
@@ -68,7 +70,8 @@ plan.put('/:id', async (c) => {
 
 plan.delete('/:id', async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM plan WHERE id = ?').bind(id).run();
+  const patientId = c.get('patientId');
+  await c.env.DB.prepare('DELETE FROM plan WHERE id = ? AND patient_id = ?').bind(id, patientId).run();
   return c.json({ message: 'Deleted' });
 });
 

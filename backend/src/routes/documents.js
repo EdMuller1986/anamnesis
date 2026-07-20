@@ -15,7 +15,8 @@ documents.get('/', async (c) => {
 // GET /api/documents/:id/file
 documents.get('/:id/file', async (c) => {
   const id = c.req.param('id');
-  const doc = await c.env.DB.prepare('SELECT * FROM documents WHERE id = ?').bind(id).first();
+  const patientId = c.get('patientId');
+  const doc = await c.env.DB.prepare('SELECT * FROM documents WHERE id = ? AND patient_id = ?').bind(id, patientId).first();
   
   if (!doc) return c.json({ error: 'Not found' }, 404);
 
@@ -64,12 +65,13 @@ documents.post('/', async (c) => {
 // DELETE /api/documents/:id
 documents.delete('/:id', async (c) => {
   const id = c.req.param('id');
-  const doc = await c.env.DB.prepare('SELECT file_path FROM documents WHERE id = ?').bind(id).first();
+  const patientId = c.get('patientId');
+  const doc = await c.env.DB.prepare('SELECT file_path FROM documents WHERE id = ? AND patient_id = ?').bind(id, patientId).first();
 
   if (doc) {
     try {
       await b2.deleteFile(c.env, doc.file_path);
-      await c.env.DB.prepare('DELETE FROM documents WHERE id = ?').bind(id).run();
+      await c.env.DB.prepare('DELETE FROM documents WHERE id = ? AND patient_id = ?').bind(id, patientId).run();
     } catch (e) {
       return c.json({ error: 'Delete failed', message: e.message }, 500);
     }

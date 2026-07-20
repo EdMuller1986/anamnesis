@@ -12,7 +12,8 @@ specialists.get('/', async (c) => {
 
 specialists.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const result = await c.env.DB.prepare('SELECT * FROM specialists WHERE id = ?').bind(id).first();
+  const patientId = c.get('patientId');
+  const result = await c.env.DB.prepare('SELECT * FROM specialists WHERE id = ? AND patient_id = ?').bind(id, patientId).first();
   if (!result) return c.json({ error: 'Not found' }, 404);
   return c.json(result);
 });
@@ -35,15 +36,16 @@ specialists.post('/', async (c) => {
 
 specialists.put('/:id', async (c) => {
   const id = c.req.param('id');
+  const patientId = c.get('patientId');
   const body = await c.req.json();
   const { full_name, specialization, clinic, contact_info, notes } = body;
 
   const { results } = await c.env.DB.prepare(`
     UPDATE specialists
     SET full_name = ?, specialization = ?, clinic = ?, contact_info = ?, notes = ?
-    WHERE id = ?
+    WHERE id = ? AND patient_id = ?
     RETURNING *
-  `).bind(full_name, specialization, clinic, contact_info, notes, id).all();
+  `).bind(full_name, specialization, clinic, contact_info, notes, id, patientId).all();
 
   if (results.length === 0) return c.json({ error: 'Not found' }, 404);
   return c.json(results[0]);
@@ -51,7 +53,8 @@ specialists.put('/:id', async (c) => {
 
 specialists.delete('/:id', async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM specialists WHERE id = ?').bind(id).run();
+  const patientId = c.get('patientId');
+  await c.env.DB.prepare('DELETE FROM specialists WHERE id = ? AND patient_id = ?').bind(id, patientId).run();
   return c.json({ message: 'Deleted' });
 });
 
