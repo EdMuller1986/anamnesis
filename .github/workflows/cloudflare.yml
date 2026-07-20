@@ -40,22 +40,16 @@ jobs:
           B2_BUCKET_NAME = "${{ secrets.B2_BUCKET_NAME }}"
           B2_KEY_ID = "${{ secrets.B2_KEY_ID }}"
           EOF
-          
-      - name: Debug - Show wrangler.toml content
-        run: |
-          cd backend
-          echo "=== wrangler.toml content ==="
-          cat wrangler.toml
-          echo "=== End of file ==="
+
+      - name: Verify Wrangler authentication
+        run: npx wrangler@3 whoami
+        working-directory: backend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
       - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: backend
-          command: deploy
-          wranglerVersion: "3.90.0"
+        run: npx wrangler@3 deploy
+        working-directory: backend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -83,9 +77,8 @@ jobs:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: frontend
-          command: pages deploy dist --project-name=anamnesis
+        run: npx wrangler@3 pages deploy dist --project-name=anamnesis
+        working-directory: frontend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
