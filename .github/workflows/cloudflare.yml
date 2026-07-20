@@ -3,13 +3,14 @@ name: Deploy to Cloudflare
 on:
   push:
     branches:
-      - main
+      - master  # Changed from 'main' to match your branch name
 
 jobs:
   deploy-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -18,33 +19,42 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       - name: Install dependencies
-        run: cd backend && npm install
+        run: cd backend && npm ci
+
+      - name: Create wrangler.toml.local from secrets
+        run: |
+          cd backend
+          cat > wrangler.toml.local << 'EOF'
+          name = "anamnesis-backend"
+          main = "src/index.js"
+          compatibility_date = "2024-05-02"
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "anamnesis_db"
+          database_id = "${{ secrets.D1_DATABASE_ID }}"
+
+          [vars]
+          CORS_ORIGINS = "*"
+          B2_ENDPOINT = "${{ secrets.B2_ENDPOINT }}"
+          B2_BUCKET_NAME = "${{ secrets.B2_BUCKET_NAME }}"
+          B2_KEY_ID = "${{ secrets.B2_KEY_ID }}"
+          EOF
 
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: backend
-          command: deploy
-
-      - name: Set B2 Application Key
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          workingDirectory: backend
-          command: secret put B2_APPLICATION_KEY
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        # Note: Wrangler secret put is interactive by default, but in CI it works if stdin is piped.
-        # However, wrangler-action doesn't easily support stdin for secrets.
-        # Better to use `wrangler secret put` with environment variables or a different approach.
-        # Actually, for CI, it's better if the user sets the secret once manually, 
-        # or we use an environment variable if possible.
+          command: deploy --config wrangler.toml.local
 
   deploy-frontend:
     runs-on: ubuntu-latest
+    needs: deploy-backend  # Deploy frontend after backend is ready
     steps:
       - uses: actions/checkout@v4
+      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -53,14 +63,18 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        run: cd frontend && npm install
+        run: cd frontend && npm ci
 
       - name: Build
         run: cd frontend && npm run build
+        env:
+          # Set API URL for production build
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: frontend
-          command: pages deploy dist --project-name=anamnesis-frontend
+          command: pages deploy dist --project-name=anamnesis
