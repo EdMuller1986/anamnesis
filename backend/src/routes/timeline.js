@@ -51,27 +51,66 @@ timeline.get('/', async (c) => {
   return c.json(result);
 });
 
+// GET /api/timeline/:id
+timeline.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const result = await c.env.DB.prepare('SELECT * FROM timeline WHERE id = ?').bind(id).first();
+  if (!result) return c.json({ error: 'Not found' }, 404);
+  return c.json(result);
+});
+
 // POST /api/timeline
 timeline.post('/', async (c) => {
   const patientId = c.get('patientId');
   const body = await c.req.json();
   const { 
     title, description, category, event_date, notes, 
-    specialist_name, specialist_type, specialist_id 
+    specialist_name, specialist_type, specialist_id,
+    transcription, ai_assessment 
   } = body;
 
   const { results } = await c.env.DB.prepare(`
     INSERT INTO timeline (
       title, description, category, event_date, notes, 
-      specialist_name, specialist_type, specialist_id, patient_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      specialist_name, specialist_type, specialist_id, 
+      transcription, ai_assessment, patient_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `).bind(
     title, description, category || 'visit', event_date, notes,
-    specialist_name, specialist_type, specialist_id, patientId
+    specialist_name, specialist_type, specialist_id, 
+    transcription, ai_assessment, patientId
   ).all();
 
   return c.json(results[0], 201);
+});
+
+// PUT /api/timeline/:id
+timeline.put('/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const { 
+    title, description, category, event_date, notes, 
+    specialist_name, specialist_type, specialist_id,
+    transcription, ai_assessment 
+  } = body;
+
+  const { results } = await c.env.DB.prepare(`
+    UPDATE timeline
+    SET title = ?, description = ?, category = ?,
+        event_date = ?, notes = ?, specialist_name = ?,
+        specialist_type = ?, specialist_id = ?,
+        transcription = ?, ai_assessment = ?, updated_at = datetime('now')
+    WHERE id = ?
+    RETURNING *
+  `).bind(
+    title, description, category, event_date, notes,
+    specialist_name, specialist_type, specialist_id,
+    transcription, ai_assessment, id
+  ).all();
+
+  if (results.length === 0) return c.json({ error: 'Not found' }, 404);
+  return c.json(results[0]);
 });
 
 // DELETE /api/timeline/:id
