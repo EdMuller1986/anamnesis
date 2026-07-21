@@ -2,6 +2,10 @@ import { Hono } from 'hono';
 
 const dashboard = new Hono();
 
+/**
+ * GET /api/dashboard — агрегированная статистика для главного экрана.
+ * Собирает данные из 10+ таблиц за один проход через Promise.all.
+ */
 dashboard.get('/', async (c) => {
   const pid = c.get('patientId');
   
@@ -22,36 +26,45 @@ dashboard.get('/', async (c) => {
     labAnomalies: c.env.DB.prepare("SELECT * FROM lab_results WHERE patient_id = ? AND status IN ('high', 'low', 'critical') ORDER BY test_date DESC LIMIT 5").bind(pid).all()
   };
 
-  const results = await Promise.all(Object.values(queries).map(p => p));
-  const keys = Object.keys(queries);
-  const data = {};
-  keys.forEach((key, i) => {
-    data[key] = results[i];
-  });
+  try {
+    const results = await Promise.all(Object.values(queries).map(p => p));
+    const keys = Object.keys(queries);
+    const data = {};
+    keys.forEach((key, i) => {
+      data[key] = results[i];
+    });
 
-  return c.json({
-    patient: data.patient || null,
-    active_diagnoses: data.diagnoses.results,
-    active_medications: data.medications.results,
-    active_specialists: data.specialists.results,
-    upcoming_reminders: data.reminders.results,
-    urgent_plan_items: data.plan.results,
-    open_errors: data.errors.results,
-    upcoming_vaccinations: data.upcomingVaccinations.results,
-    latest_growth: data.latestGrowth || null,
-    lab_anomalies: data.labAnomalies.results,
-    stats: {
-      documents: data.docsCount?.count || 0,
-      plan_total: data.planTotal?.count || 0,
-      plan_done: data.planDone?.count || 0,
-      errors_open: data.errorsOpen?.count || 0,
-      diagnoses: data.diagnoses.results.length,
-      specialists: data.specialists.results.length,
-      reminders: data.reminders.results.length,
-    },
-  });
+    return c.json({
+      patient: data.patient || null,
+      active_diagnoses: data.diagnoses.results,
+      active_medications: data.medications.results,
+      active_specialists: data.specialists.results,
+      upcoming_reminders: data.reminders.results,
+      urgent_plan_items: data.plan.results,
+      open_errors: data.errors.results,
+      upcoming_vaccinations: data.upcomingVaccinations.results,
+      latest_growth: data.latestGrowth || null,
+      lab_anomalies: data.labAnomalies.results,
+      stats: {
+        documents: data.docsCount?.count || 0,
+        plan_total: data.planTotal?.count || 0,
+        plan_done: data.planDone?.count || 0,
+        errors_open: data.errorsOpen?.count || 0,
+        diagnoses: data.diagnoses.results.length,
+        specialists: data.specialists.results.length,
+        reminders: data.reminders.results.length,
+      },
+    });
+  } catch (err) {
+    console.error('Dashboard Error:', err);
+    throw err; // Проброс в глобальный обработчик (app.onError)
+  }
 });
 
+/**
+ * GET /api/dashboard/ai-summary
+ * Получить последнюю сгенерированную ИИ-сводку по состоянию здоровья.
+ */
 dashboard.get('/ai-summary', async (c) => {
   const pid = c.get('patientId');
   const key = `ai_summary_${pid}`;
@@ -61,6 +74,10 @@ dashboard.get('/ai-summary', async (c) => {
   return c.json(data);
 });
 
+/**
+ * PUT /api/dashboard/ai-summary
+ * Обновить ИИ-сводку (вызывается ИИ-координатором после анализа).
+ */
 dashboard.put('/ai-summary', async (c) => {
   const pid = c.get('patientId');
   const body = await c.req.json();

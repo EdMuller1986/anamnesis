@@ -1,12 +1,19 @@
 import { Hono } from 'hono';
 
+/**
+ * Admin tools — операционные эндпоинты для AI-координатора (Claude).
+ * Эти эндпоинты нужны для того, чтобы Claude мог выполнять свою работу
+ * одной-двумя командами вместо множества SELECT-ов.
+ * Все эндпоинты защищены ADMIN_TOKEN.
+ */
 const adminTools = new Hono();
 
-// GET /integrity — Simplified for D1 (D1 doesn't support PRAGMA check directly via API)
+// GET /api/admin/tools/integrity — проверка целостности БД (упрощено для D1)
 adminTools.get('/integrity', async (c) => {
   const ftsValid = [];
   for (const tbl of ['timeline_fts', 'documents_fts', 'comments_fts']) {
     try {
+      // Проверка работоспособности FTS индексов
       await c.env.DB.prepare(`INSERT INTO ${tbl}(${tbl}) VALUES ('integrity-check')`).run();
       ftsValid.push({ table: tbl, ok: true });
     } catch (e) {
@@ -14,16 +21,17 @@ adminTools.get('/integrity', async (c) => {
     }
   }
   return c.json({
-    integrity: 'D1 handled',
-    foreign_key_violations: [], // D1 validates on write
+    integrity: 'D1 managed',
+    foreign_key_violations: [], // D1 проверяет FK на лету при записи
     fts_status: ftsValid
   });
 });
 
-// GET /orphan-check
+// GET /api/admin/tools/orphan-check — поиск записей без документного обоснования
 adminTools.get('/orphan-check', async (c) => {
   const pid = c.get('patientId');
 
+  // 1. Prescriptions с несуществующими связями
   const deadFkPrescriptions = await c.env.DB.prepare(`
     SELECT p.id, p.medication_id, p.diagnosis_id, p.specialist_id, p.timeline_id
     FROM prescriptions p
@@ -40,6 +48,7 @@ adminTools.get('/orphan-check', async (c) => {
       )
   `).bind(pid).all();
 
+  // 2. Documents без привязки к событию или источнику
   const orphanDocuments = await c.env.DB.prepare(`
     SELECT id, title, file_path, created_at
     FROM documents
@@ -50,6 +59,7 @@ adminTools.get('/orphan-check', async (c) => {
     ORDER BY created_at DESC
   `).bind(pid).all();
 
+  // 3. Medications без рецептов/назначений
   const orphanMedications = await c.env.DB.prepare(`
     SELECT m.id, m.name, m.status, m.created_at
     FROM medications m
@@ -58,6 +68,7 @@ adminTools.get('/orphan-check', async (c) => {
     ORDER BY m.created_at DESC
   `).bind(pid).all();
 
+  // 4. Пустые события в таймлайне
   const emptyTimeline = await c.env.DB.prepare(`
     SELECT t.id, t.event_date, t.title, t.category
     FROM timeline t
@@ -85,7 +96,11 @@ adminTools.get('/orphan-check', async (c) => {
   });
 });
 
-// POST /sql
+/**
+ * POST /api/admin/tools/sql
+ * Выполнить произвольный SQL (для ИИ-координатора).
+ * Включает базовую защиту от деструктивных команд.
+ */
 adminTools.post('/sql', async (c) => {
   const { sql, params = [] } = await c.req.json();
   const forbidden = /\b(PRAGMA|ATTACH|DETACH|LOAD_EXTENSION)\b/i;
@@ -111,7 +126,11 @@ adminTools.post('/sql', async (c) => {
   }
 });
 
-// GET /search
+/**
+ * GET /api/admin/tools/search?q=...
+ * Унифицированный полнотекстовый поиск (FTS5).
+ * Ищет одновременно по таймлайну, документам и комментариям.
+ */
 adminTools.get('/search', async (c) => {
   const q = c.req.query('q');
   const pid = c.get('patientId');
@@ -119,7 +138,7 @@ adminTools.get('/search', async (c) => {
 
   const ftsQuery = q.replace(/"/g, '""');
 
-  const [timeline, documents, comments] = await Promise.all([
+  const [timelineHits, documentHits, commentHits] = await Promise.all([
     c.env.DB.prepare(`
       SELECT t.id, t.event_date, t.title,
              snippet(timeline_fts, 2, '<mark>', '</mark>', '…', 20) AS snippet
@@ -147,9 +166,9 @@ adminTools.get('/search', async (c) => {
   ]);
 
   return c.json({
-    timeline: timeline.results,
-    documents: documents.results,
-    comments: comments.results
+    timeline: timelineHits.results,
+    documents: documentHits.results,
+    comments: commentHits.results
   });
 });
 
