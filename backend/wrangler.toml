@@ -5,12 +5,11 @@ compatibility_date = "2024-05-02"
 [[d1_databases]]
 binding = "DB"
 database_name = "anamnesis_db"
-database_id = "YOUR_D1_DATABASE_ID"  # Replace with your D1 database ID from Cloudflare dashboard
+database_id = "f5dcfead-71f4-46e1-a1c7-32902c6db311"
 
-# B2 Credentials (via environment variables for security)
+# B2 Credentials
 [vars]
 CORS_ORIGINS = "*"
-B2_ENDPOINT = "s3.us-east-005.backblazeb2.com"  # Or your Backblaze B2 region endpoint
-B2_BUCKET_NAME = "YOUR_BUCKET_NAME"  # Replace with your B2 bucket name
-B2_KEY_ID = "YOUR_KEY_ID"  # Replace with your B2 key ID
-# B2_APPLICATION_KEY — set via `wrangler secret put B2_APPLICATION_KEY`
+B2_ENDPOINT = "s3.us-east-005.backblazeb2.com"
+B2_BUCKET_NAME = "anamnezis"
+B2_KEY_ID = "1747a8c37830"
