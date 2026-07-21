@@ -23,6 +23,7 @@ import reminders from './routes/reminders';
 import aiRequests from './routes/ai-requests';
 import history from './routes/history';
 import patientContext from './routes/patient-context';
+import search from './routes/search';
 
 const app = new Hono();
 
@@ -120,6 +121,7 @@ app.route('/api/reminders', reminders);
 app.route('/api/ai-requests', aiRequests);
 app.route('/api/history', history);
 app.route('/api/patient-context', patientContext);
+app.route('/api/search', search);
 
 // Вход
 app.post('/api/auth/login', async (c) => {
