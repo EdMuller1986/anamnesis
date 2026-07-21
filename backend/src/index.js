@@ -80,6 +80,27 @@ app.use('/api/*', authMiddleware);
 
 app.get('/api/webauthn/credentials', (c) => c.json([]));
 
+// Проверка статуса сессии
+app.get('/api/auth/check', async (c) => {
+  const session = c.get('session');
+  return c.json({
+    ok: true,
+    patient_id: session.patient_id,
+    expires_at: session.expires_at
+  });
+});
+
+// Выход
+app.post('/api/auth/logout', async (c) => {
+  const token = c.req.header('X-Session-Token') || 
+                c.req.header('Authorization')?.replace('Bearer ', '') || 
+                getCookie(c, 'session');
+  if (token) {
+    await c.env.DB.prepare('UPDATE sessions SET revoked = 1 WHERE token = ?').bind(token).run();
+  }
+  return c.json({ message: 'Logged out' });
+});
+
 // Монтирование роутов
 app.route('/api/patient', patient);
 app.route('/api/timeline', timeline);
