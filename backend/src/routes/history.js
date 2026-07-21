@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { renderHistory } from '../services/changelog';
 
 const history = new Hono();
 
@@ -11,21 +12,8 @@ history.get('/', async (c) => {
     'SELECT * FROM audit_log WHERE patient_id = ? ORDER BY id DESC LIMIT ?'
   ).bind(pid, limit).all();
 
-  // Десериализуем JSON-строки из базы в объекты для фронтенда
-  const parsedResults = results.map(row => {
-    let oldVal = null;
-    let newVal = null;
-    try { if (row.old_value) oldVal = JSON.parse(row.old_value); } catch (e) {}
-    try { if (row.new_value) newVal = JSON.parse(row.new_value); } catch (e) {}
-    
-    return {
-      ...row,
-      old_value: oldVal,
-      new_value: newVal
-    };
-  });
-
-  return c.json(parsedResults);
+  const rendered = await renderHistory(results);
+  return c.json(rendered);
 });
 
 export default history;
