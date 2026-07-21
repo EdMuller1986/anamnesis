@@ -1,26 +1,14 @@
-// GET /api/history — автоматическая история изменений per-patient.
-//
-// Читает из audit_log, рендерит через services/changelog.js в человекочитаемый
-// формат с группировкой по датам и близким по времени правкам одной сущности.
+import { Hono } from 'hono';
 
-const { Router } = require('express');
-const { getHistory } = require('../services/changelog');
+const history = new Hono();
 
-const router = Router();
-
-router.get('/', (req, res) => {
-  try {
-    const patientId = req.patientId || 1;
-    const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
-    const offset = Math.max(parseInt(req.query.offset || '0', 10), 0);
-    const since = req.query.since || null;
-
-    const result = getHistory({ patientId, limit, offset, since });
-    res.json(result);
-  } catch (err) {
-    console.error('[history] error:', err);
-    res.status(500).json({ error: 'Ошибка получения истории' });
-  }
+history.get('/', async (c) => {
+  const pid = c.get('patientId');
+  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
+  const { results } = await c.env.DB.prepare(
+    'SELECT * FROM audit_log WHERE patient_id = ? ORDER BY id DESC LIMIT ?'
+  ).bind(pid, limit).all();
+  return c.json(results);
 });
 
-module.exports = router;
+export default history;

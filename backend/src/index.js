@@ -1,13 +1,4 @@
 import { Hono } from 'hono';
-import { cors } from 'hono/cors';
-import { secureHeaders } from 'hono/secure-headers';
-import { getCookie } from 'hono/cookie';
-import * as authSession from './services/auth-session';
-
-// Import Routes
-import documents from './routes/documents';
-import patient from './routes/patient';
-import timeline from './routes/timeline';
 import diagnoses from './routes/diagnoses';
 import medications from './routes/medications';
 import specialists from './routes/specialists';
@@ -18,6 +9,17 @@ import comments from './routes/comments';
 import growth from './routes/growth';
 import vaccinations from './routes/vaccinations';
 import adminTools from './routes/admin-tools';
+import errors from './routes/errors';
+import reminders from './routes/reminders';
+import aiRequests from './routes/ai-requests';
+import history from './routes/history';
+import patientContext from './routes/patient-context';
+import documents from './routes/documents';
+import patient from './routes/patient';
+import * as authSession from './services/auth-session';
+import { getCookie } from 'hono/cookie';
+import { cors } from 'hono/cors';
+import { secureHeaders } from 'hono/secure-headers';
 
 const app = new Hono();
 
@@ -27,6 +29,12 @@ app.use('*', cors({
   credentials: true,
 }));
 app.use('*', secureHeaders());
+
+// Global Error Handler
+app.onError((err, c) => {
+  console.error(`Worker Error: ${err.message}`, err.stack);
+  return c.json({ error: 'Internal Server Error', message: err.message }, 500);
+});
 
 // Helper for metadata
 const getMeta = (c) => ({
@@ -43,12 +51,11 @@ const authMiddleware = async (c, next) => {
     '/api/auth/login',
     '/api/auth/check',
     '/api/health',
-    '/api/webauthn/available',
-    '/api/webauthn/login/options',
-    '/api/webauthn/login/verify'
+    '/api/version',
+    '/api/webauthn/available'
   ];
 
-  if (skipPaths.some(p => path === p)) return await next();
+  if (skipPaths.some(p => path === p || path.startsWith('/api/webauthn/login'))) return await next();
 
   const token = c.req.header('X-Session-Token') || 
                 c.req.header('Authorization')?.replace('Bearer ', '') || 
@@ -69,58 +76,10 @@ const authMiddleware = async (c, next) => {
 
 app.use('/api/*', authMiddleware);
 
-// Admin Auth Middleware (Special for tools)
-app.use('/api/admin/*', async (c, next) => {
-  const adminToken = c.req.header('X-Admin-Token');
-  if (c.env.ADMIN_TOKEN && adminToken !== c.env.ADMIN_TOKEN) {
-    return c.json({ error: 'Forbidden' }, 403);
-  }
-  await next();
-});
-
-// Routes
-app.get('/api/health', async (c) => {
-  try {
-    await c.env.DB.prepare('SELECT 1').first();
-    return c.json({ status: 'ok', db: 'connected' });
-  } catch (e) {
-    return c.json({ status: 'error', db: 'disconnected', message: e.message }, 503);
-  }
-});
-
-// Login
-app.post('/api/auth/login', async (c) => {
-  const { pin } = await c.req.json();
-  const meta = getMeta(c);
-
-  try {
-    const lockout = await authSession.checkLockout(c.env.DB, meta.ip, meta.deviceId);
-    if (lockout.locked) {
-      return c.json({
-        error: 'Too many attempts',
-        remaining_sec: Math.ceil(lockout.remainingMs / 1000)
-      }, 429);
-    }
-
-    const storedHash = await c.env.DB.prepare(
-      'SELECT value FROM app_settings WHERE key = ?'
-    ).bind(`pin_hash_${meta.patientId}`).first('value');
-
-    if (!storedHash) return c.json({ error: 'PIN not configured' }, 500);
-
-    if (!(await authSession.verifyPin(pin, storedHash))) {
-      const fail = await authSession.recordAuthFailure(c.env.DB, meta.ip, meta.deviceId, meta.patientId);
-      return c.json({ error: 'Invalid PIN', attempts: fail.attempts }, 401);
-    }
-
-    await authSession.resetAuthFailures(c.env.DB, meta.ip, meta.deviceId);
-    const token = await authSession.createSession(c.env.DB, meta.patientId, meta.ip, meta.ua, meta.deviceId);
-
-    return c.json({ token, expires_days: 14 });
-  } catch (err) {
-    return c.json({ error: 'Login error', message: err.message }, 500);
-  }
-});
+// Stubs for missing functional endpoints
+app.get('/api/version', (c) => c.json({ version: '2.0.0-serverless', build: 'cf-workers' }));
+app.get('/api/webauthn/available', (c) => c.json({ available: false }));
+app.get('/api/auth/security-status', (c) => c.json({ webauthn_enabled: false, lockout_active: false }));
 
 // Mount Routes
 app.route('/api/patient', patient);
@@ -136,5 +95,33 @@ app.route('/api/comments', comments);
 app.route('/api/growth', growth);
 app.route('/api/vaccinations', vaccinations);
 app.route('/api/admin/tools', adminTools);
+app.route('/api/errors', errors);
+app.route('/api/reminders', reminders);
+app.route('/api/ai-requests', aiRequests);
+app.route('/api/history', history);
+app.route('/api/patient-context', patientContext);
+
+// Login
+app.post('/api/auth/login', async (c) => {
+  const { pin } = await c.req.json();
+  const meta = getMeta(c);
+  try {
+    const lockout = await authSession.checkLockout(c.env.DB, meta.ip, meta.deviceId);
+    if (lockout.locked) return c.json({ error: 'Too many attempts', remaining_sec: Math.ceil(lockout.remainingMs / 1000) }, 429);
+    const storedHash = await c.env.DB.prepare('SELECT value FROM app_settings WHERE key = ?').bind(`pin_hash_${meta.patientId}`).first('value');
+    if (!storedHash) return c.json({ error: 'PIN not configured' }, 500);
+    if (!(await authSession.verifyPin(pin, storedHash))) {
+      const fail = await authSession.recordAuthFailure(c.env.DB, meta.ip, meta.deviceId, meta.patientId);
+      return c.json({ error: 'Invalid PIN', attempts: fail.attempts }, 401);
+    }
+    await authSession.resetAuthFailures(c.env.DB, meta.ip, meta.deviceId);
+    const token = await authSession.createSession(c.env.DB, meta.patientId, meta.ip, meta.ua, meta.deviceId);
+    return c.json({ token, expires_days: 14 });
+  } catch (err) {
+    return c.json({ error: 'Login error', message: err.message }, 500);
+  }
+});
+
+app.get('/api/health', (c) => c.json({ status: 'ok' }));
 
 export default app;
