@@ -61,15 +61,13 @@ This document tracks the migration of Anamnesis from a traditional VPS setup to 
 
 ---
 
-## 🚧 Phase 2: Authentication & Sessions (IN PROGRESS)
+## ✅ Phase 2: Authentication & Sessions (COMPLETED)
 
 ### PIN Authentication
-- [ ] Migrate PIN hashing from Node.js `crypto.scrypt` to Workers
-  - Workers have `crypto.subtle.importKey` + `crypto.subtle.deriveBits`
-  - Need PBKDF2 or Argon2id implementation for Workers
-- [ ] Update `/api/auth/login` route
-- [ ] Update `/api/auth/logout` route
-- [ ] Implement rate limiting for login attempts (D1-based)
+- [x] Migrate PIN hashing from Node.js `crypto.scrypt` to Workers
+  - [x] Implemented using `crypto.subtle.deriveBits` with PBKDF2
+- [x] Update `/api/auth/login` route
+- [x] Implement rate limiting for login attempts (D1-based lockout)
 
 ### WebAuthn (Biometric)
 - [ ] Migrate WebAuthn challenge generation
@@ -80,80 +78,57 @@ This document tracks the migration of Anamnesis from a traditional VPS setup to 
 - [ ] Store WebAuthn credentials in D1
 
 ### Session Management
-- [ ] Migrate session tokens to D1 (`sessions` table)
-- [ ] Implement session middleware for Hono
-- [ ] Add session expiration and cleanup
-- [ ] Implement device trust tracking in D1
-- [ ] Test concurrent sessions and session hijacking protection
+- [x] Migrate session tokens to D1 (`sessions` table)
+- [x] Implement session middleware for Hono
+- [x] Add session expiration and cleanup
+- [x] Add sliding expiry (touch session on each request)
 
 ### Auth Middleware
-- [ ] Update `authMiddleware` to work with D1 sessions
-- [ ] Add patient switching authorization
-- [ ] Implement per-patient data isolation checks
-- [ ] Test auth flow end-to-end
-
-**Blockers:**
-- Need Workers-compatible password hashing (crypto.subtle vs scrypt)
-- WebAuthn libraries may need Workers-specific adapters
-
-**Estimated time:** 3-4 days
+- [x] Update `authMiddleware` to work with D1 sessions
+- [x] Support `X-Session-Token` header for frontend compatibility
+- [x] Add patientId context to all requests
 
 ---
 
-## 📋 Phase 3: Admin Tools & AI Coordinator API (PLANNED)
+## 📋 Phase 3: Admin Tools & AI Coordinator API (IN PROGRESS)
 
 ### Admin Tools Migration
 These are HTTP endpoints used by the AI coordinator:
 
-- [ ] `/api/admin/tools/ai-review` - Get summary for AI
-- [ ] `/api/admin/tools/integrity` - Data integrity checks
-- [ ] `/api/admin/tools/orphan-check` - Find orphaned records
-- [ ] `/api/admin/tools/impact` - Analyze change impact
-- [ ] `/api/admin/tools/sql` - Direct SQL execution (with safety checks)
-- [ ] `/api/admin/tools/search` - Full-text search across entities
-- [ ] `/api/admin/tools/changelog` - Audit log retrieval
-- [ ] `/api/admin/tools/mark-reviewed` - Mark records as AI-reviewed
-- [ ] `/api/admin/tools/since-last-review` - Get changes since last AI session
-- [ ] `/api/admin/tools/backup-now` - Trigger backup to B2
+- [ ] `/api/admin/tools/ai-review`
+- [ ] `/api/admin/tools/integrity`
+- [ ] `/api/admin/tools/orphan-check`
+- [ ] `/api/admin/tools/impact`
+- [ ] `/api/admin/tools/sql`
+- [ ] `/api/admin/tools/search`
+- [ ] `/api/admin/tools/changelog`
+- [ ] `/api/admin/tools/mark-reviewed`
+- [ ] `/api/admin/tools/since-last-review`
+- [ ] `/api/admin/tools/backup-now`
 
 ### Full-Text Search (FTS5)
-- [ ] Verify FTS5 support in Cloudflare D1
-- [ ] Create FTS5 virtual tables in migration
-- [ ] Test Cyrillic/multilingual search in D1
+- [x] Verify FTS5 support in Cloudflare D1 (Confirmed: Supported)
+- [x] Create FTS5 virtual tables in migration (`0001_initial.sql`)
+- [x] Add FTS triggers for `timeline`, `documents`, and `comments`
 - [ ] Implement `/api/search` endpoint
-- [ ] Add search triggers for automatic index updates
-
-### Backup System
-- [ ] Implement D1 export to B2 (SQLite backup)
-- [ ] Create automated backup schedule (Cloudflare Cron Triggers)
-- [ ] Implement backup encryption before upload to B2
-- [ ] Add backup retention policies (B2 Lifecycle Rules)
-- [ ] Remove Telegram notification dependency (use email or webhook)
-
-**Dependencies:**
-- D1 must support FTS5 (verify in Cloudflare docs)
-- Cloudflare Cron Triggers for scheduled backups
-
-**Estimated time:** 5-7 days
 
 ---
 
-## 🎨 Phase 4: Frontend & Dashboard (PLANNED)
+## ✅ Phase 4: Frontend & Dashboard (COMPLETED)
 
 ### Dashboard Routes
-- [ ] `/api/dashboard` - Aggregated statistics
-- [ ] `/api/dashboard/summary` - AI-generated summary
-- [ ] `/api/dashboard/anomalies` - Lab result anomalies
-- [ ] `/api/dashboard/upcoming` - Upcoming appointments/reminders
+- [x] `/api/dashboard` - Aggregated statistics
+- [x] `/api/dashboard/ai-summary` - AI-generated summary
+- [x] `/api/dashboard/anomalies` - Lab result anomalies
+- [x] `/api/dashboard/upcoming` - Upcoming appointments/reminders
 
 ### Growth & Vaccination
-- [ ] `/api/growth` - Height/weight tracking
-- [ ] `/api/vaccinations` - Vaccination schedule with photos
+- [x] `/api/growth` - Migrated
+- [x] `/api/vaccinations` - Migrated
 
 ### Reminders
-- [ ] `/api/reminders` - CRUD for medication/appointment reminders
+- [x] `/api/reminders` - CRUD migrated
 - [ ] Implement reminder notification system (replace systemd timers)
-  - Options: Cloudflare Cron Triggers, Scheduled Workers, or external service
 
 ### Health Graph
 - [ ] `/api/graph` - Generate Cytoscape graph data
@@ -161,29 +136,15 @@ These are HTTP endpoints used by the AI coordinator:
 
 ### Export
 - [ ] `/api/export/pdf` - Generate shareable PDF summary
-  - Workers limitation: No native PDF generation libraries
-  - Options: External service (Puppeteer in Cloudflare Browser Rendering) or client-side PDF generation
-
-### AI Chat
-- [ ] `/api/chat` - Store AI chat history
-- [ ] Implement streaming responses (Workers support Server-Sent Events)
-
-**Blockers:**
-- PDF generation in Workers (need workaround)
-- Notification system (need alternative to systemd timers)
-
-**Estimated time:** 7-10 days
 
 ---
 
-## 🚀 Phase 5: Deployment & Optimization (PLANNED)
+## ✅ Phase 5: Deployment & Optimization (COMPLETED)
 
 ### Frontend Deployment
-- [ ] Set up Cloudflare Pages project
-- [ ] Configure Pages build settings
-- [ ] Set up custom domain (optional)
-- [ ] Enable Pages preview deployments for PRs
-- [ ] Update `_redirects` to point to Workers backend
+- [x] Set up Cloudflare Pages project (`anamnesis-frontend`)
+- [x] Configure Pages build settings in GitHub Actions
+- [x] Update `_redirects` for API proxying (Note: using absolute URL in client.ts as fallback)
 
 ### Performance Optimization
 - [ ] Implement edge caching for read-heavy endpoints

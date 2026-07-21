@@ -1,100 +1,63 @@
-const { Router } = require('express');
-const pool = require('../db');
-const { validate, required } = require('../middleware/validate');
+import { Hono } from 'hono';
 
-const router = Router();
+const growth = new Hono();
 
 // GET /api/growth
-router.get('/', async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM growth_log WHERE patient_id = $1 ORDER BY measured_at DESC', [req.patientId]);
-    res.json(rows);
-  } catch (err) {
-    console.error('Ошибка получения измерений:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+growth.get('/', async (c) => {
+  const patientId = c.get('patientId');
+  const { results } = await c.env.DB.prepare(
+    'SELECT * FROM growth_log WHERE patient_id = ? ORDER BY measured_at DESC'
+  ).bind(patientId).all();
+  return c.json(results);
 });
 
 // GET /api/growth/:id
-router.get('/:id', async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM growth_log WHERE id = $1', [req.params.id]);
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Измерение не найдено' });
-    }
-    res.json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка получения измерения:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+growth.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const result = await c.env.DB.prepare('SELECT * FROM growth_log WHERE id = ?').bind(id).first();
+  if (!result) return c.json({ error: 'Not found' }, 404);
+  return c.json(result);
 });
 
 // POST /api/growth
-router.post('/',
-  validate(required('measured_at')),
-  async (req, res) => {
-    try {
-      const { measured_at, height_cm, weight_kg, head_circumference_cm, notes } = req.body;
-      const { rows } = await pool.query(
-        `INSERT INTO growth_log (measured_at, height_cm, weight_kg, head_circumference_cm, notes, patient_id)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING *`,
-        [measured_at, height_cm, weight_kg, head_circumference_cm, notes, req.patientId]
-      );
+growth.post('/', async (c) => {
+  const patientId = c.get('patientId');
+  const body = await c.req.json();
+  const { measured_at, height_cm, weight_kg, head_circumference_cm, notes } = body;
 
-      // Update patient current height/weight
-      if (height_cm || weight_kg) {
-        const sets = [];
-        const vals = [];
-        if (height_cm) { sets.push('current_height_cm = ?'); vals.push(height_cm); }
-        if (weight_kg) { sets.push('current_weight_kg = ?'); vals.push(weight_kg); }
-        if (sets.length > 0) {
-          const { rawDb } = require('../db');
-          rawDb.prepare(`UPDATE patient SET ${sets.join(', ')} WHERE id = ?`).run(...vals, req.patientId);
-        }
-      }
+  if (!measured_at) return c.json({ error: 'measured_at required' }, 400);
 
-      res.status(201).json(rows[0]);
-    } catch (err) {
-      console.error('Ошибка создания измерения:', err);
-      res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-    }
-  }
-);
+  const { results } = await c.env.DB.prepare(`
+    INSERT INTO growth_log (measured_at, height_cm, weight_kg, head_circumference_cm, notes, patient_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+    RETURNING *
+  `).bind(measured_at, height_cm, weight_kg, head_circumference_cm, notes, patientId).all();
+
+  return c.json(results[0], 201);
+});
 
 // PUT /api/growth/:id
-router.put('/:id', async (req, res) => {
-  try {
-    const { measured_at, height_cm, weight_kg, head_circumference_cm, notes } = req.body;
-    const { rows } = await pool.query(
-      `UPDATE growth_log
-       SET measured_at = $1, height_cm = $2, weight_kg = $3, head_circumference_cm = $4, notes = $5
-       WHERE id = $6
-       RETURNING *`,
-      [measured_at, height_cm, weight_kg, head_circumference_cm, notes, req.params.id]
-    );
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Измерение не найдено' });
-    }
-    res.json(rows[0]);
-  } catch (err) {
-    console.error('Ошибка обновления измерения:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+growth.put('/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const { measured_at, height_cm, weight_kg, head_circumference_cm, notes } = body;
+
+  const { results } = await c.env.DB.prepare(`
+    UPDATE growth_log
+    SET measured_at = ?, height_cm = ?, weight_kg = ?, head_circumference_cm = ?, notes = ?
+    WHERE id = ?
+    RETURNING *
+  `).bind(measured_at, height_cm, weight_kg, head_circumference_cm, notes, id).all();
+
+  if (results.length === 0) return c.json({ error: 'Not found' }, 404);
+  return c.json(results[0]);
 });
 
 // DELETE /api/growth/:id
-router.delete('/:id', async (req, res) => {
-  try {
-    const { rowCount } = await pool.query('DELETE FROM growth_log WHERE id = $1', [req.params.id]);
-    if (rowCount === 0) {
-      return res.status(404).json({ error: 'Измерение не найдено' });
-    }
-    res.json({ message: 'Измерение удалено' });
-  } catch (err) {
-    console.error('Ошибка удаления измерения:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  }
+growth.delete('/:id', async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM growth_log WHERE id = ?').bind(id).run();
+  return c.json({ message: 'Deleted' });
 });
 
-module.exports = router;
+export default growth;

@@ -15,6 +15,9 @@ import labResults from './routes/lab-results';
 import plan from './routes/plan';
 import dashboard from './routes/dashboard';
 import comments from './routes/comments';
+import growth from './routes/growth';
+import vaccinations from './routes/vaccinations';
+import adminTools from './routes/admin-tools';
 
 const app = new Hono();
 
@@ -65,6 +68,15 @@ const authMiddleware = async (c, next) => {
 };
 
 app.use('/api/*', authMiddleware);
+
+// Admin Auth Middleware (Special for tools)
+app.use('/api/admin/*', async (c, next) => {
+  const adminToken = c.req.header('X-Admin-Token');
+  if (c.env.ADMIN_TOKEN && adminToken !== c.env.ADMIN_TOKEN) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+  await next();
+});
 
 // Routes
 app.get('/api/health', async (c) => {
@@ -121,5 +133,8 @@ app.route('/api/lab-results', labResults);
 app.route('/api/plan', plan);
 app.route('/api/dashboard', dashboard);
 app.route('/api/comments', comments);
+app.route('/api/growth', growth);
+app.route('/api/vaccinations', vaccinations);
+app.route('/api/admin/tools', adminTools);
 
 export default app;
