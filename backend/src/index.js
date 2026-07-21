@@ -3,9 +3,18 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { getCookie } from 'hono/cookie';
 import * as authSession from './services/auth-session';
+
+// Import Routes
 import documents from './routes/documents';
 import patient from './routes/patient';
 import timeline from './routes/timeline';
+import diagnoses from './routes/diagnoses';
+import medications from './routes/medications';
+import specialists from './routes/specialists';
+import labResults from './routes/lab-results';
+import plan from './routes/plan';
+import dashboard from './routes/dashboard';
+import comments from './routes/comments';
 
 const app = new Hono();
 
@@ -101,9 +110,16 @@ app.post('/api/auth/login', async (c) => {
   }
 });
 
-// Mount other routes
-app.route('/api/documents', documents);
+// Mount Routes
 app.route('/api/patient', patient);
 app.route('/api/timeline', timeline);
+app.route('/api/documents', documents);
+app.route('/api/diagnoses', diagnoses);
+app.route('/api/medications', medications);
+app.route('/api/specialists', specialists);
+app.route('/api/lab-results', labResults);
+app.route('/api/plan', plan);
+app.route('/api/dashboard', dashboard);
+app.route('/api/comments', comments);
 
 export default app;
