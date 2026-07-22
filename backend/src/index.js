@@ -69,20 +69,13 @@ const authMiddleware = async (c, next) => {
                 c.req.query('token') ||
                 getCookie(c, 'session');
 
-  // DEBUG
-  if (!token) {
-    console.error(`Auth failed: No token in request to ${path}`);
-    return c.json({ error: 'Unauthorized: No token' }, 401);
-  }
+  if (!token) return c.json({ error: 'Unauthorized' }, 401);
 
   const session = await authSession.getSession(c.env.DB, token);
-  if (!session) {
-    console.error(`Auth failed: Session not found for token to ${path}`);
-    return c.json({ error: 'Unauthorized: Invalid token' }, 401);
-  }
+  if (!session) return c.json({ error: 'Unauthorized' }, 401);
 
-  const meta = getMeta(c);
-  c.executionCtx.waitUntil(authSession.touchSession(c.env.DB, token, meta.ip));
+  const ip = c.req.header('cf-connecting-ip') || '0.0.0.0';
+  c.executionCtx.waitUntil(authSession.touchSession(c.env.DB, token, ip));
 
   c.set('patientId', session.patient_id);
   c.set('session', session);
@@ -90,6 +83,50 @@ const authMiddleware = async (c, next) => {
 };
 
 app.use('/api/*', authMiddleware);
+
+// --- Export Logic ---
+function esc(text) {
+  if (!text && text !== 0) return '';
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? dateStr : d.toLocaleDateString('ru-RU');
+}
+
+app.get('/api/export/pdf', async (c) => {
+  const token = c.req.query('token');
+  const pid = parseInt(c.req.query('patient_id') || '1', 10);
+  
+  if (!token) return c.text('Unauthorized', 401);
+  const session = await authSession.getSession(c.env.DB, token);
+  if (!session || session.patient_id !== pid) return c.text('Unauthorized', 401);
+
+  // Fetch data
+  const [p, ds, ms, ts] = await Promise.all([
+    c.env.DB.prepare('SELECT * FROM patient WHERE id = ?').bind(pid).first(),
+    c.env.DB.prepare('SELECT * FROM diagnoses WHERE patient_id = ? ORDER BY status ASC, created_at DESC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM medications WHERE patient_id = ? ORDER BY status ASC, created_at DESC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM timeline WHERE patient_id = ? ORDER BY event_date DESC').bind(pid).all()
+  ]);
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Отчёт: ${esc(p.full_name)}</title>
+<style>body{font-family:sans-serif;max-width:800px;margin:20px auto;padding:20px;line-height:1.4;}h1{border-bottom:2px solid #007AFF;} .section{margin-top:20px;padding:10px;background:#f9f9f9;border-radius:8px;} table{width:100%;border-collapse:collapse;margin:10px 0;}th,td{border:1px solid #ddd;padding:8px;text-align:left;}</style>
+</head><body>
+<h1>Медицинский отчёт</h1>
+<div class="section"><strong>Пациент:</strong> ${esc(p.full_name)}<br><strong>Дата рождения:</strong> ${formatDate(p.date_of_birth)}<br><strong>Пол:</strong> ${esc(p.gender)}</div>
+<h2>Диагнозы</h2><table><tr><th>Название</th><th>Статус</th></tr>${ds.results.map(d=>`<tr><td>${esc(d.name)}</td><td>${esc(d.status)}</td></tr>`).join('')}</table>
+<h2>Лекарства</h2><table><tr><th>Название</th><th>Дозировка</th><th>Статус</th></tr>${ms.results.map(m=>`<tr><td>${esc(m.name)}</td><td>${esc(m.dosage)}</td><td>${esc(m.status)}</td></tr>`).join('')}</table>
+<h2>История</h2><table><tr><th>Дата</th><th>Событие</th></tr>${ts.results.map(t=>`<tr><td>${formatDate(t.event_date)}</td><td>${esc(t.title)}</td></tr>`).join('')}</table>
+<p style="color:#666;font-size:12px;margin-top:40px;">Сформировано автоматически в Anamnesis Serverless</p>
+</body></html>`;
+
+  return c.html(html, 200, {
+    'Content-Type': 'text/html; charset=UTF-8',
+    'Content-Disposition': `inline; filename="report_${pid}.html"`
+  });
+});
 
 // Admin Auth Middleware
 app.use('/api/admin/*', async (c, next) => {
@@ -105,18 +142,6 @@ app.get('/api/health', (c) => c.json({ status: 'ok', db: 'connected' }));
 app.get('/api/version', (c) => c.json({ version: '2.0.0-serverless' }));
 app.get('/api/webauthn/available', (c) => c.json({ available: false }));
 app.get('/api/auth/security-status', (c) => c.json({ webauthn_enabled: false, lockout_active: false }));
-
-// Export Route
-app.get('/api/export/pdf', async (c) => {
-  const token = c.req.query('token');
-  const pid = parseInt(c.req.query('patient_id') || '1', 10);
-  
-  if (!token) return c.text('Unauthorized', 401);
-  const session = await authSession.getSession(c.env.DB, token);
-  if (!session || session.patient_id !== pid) return c.text('Unauthorized', 401);
-
-  return c.text('PDF Export is not yet implemented in the Cloudflare version.', 200);
-});
 
 // Auth
 app.post('/api/auth/login', async (c) => {
@@ -141,9 +166,7 @@ app.post('/api/auth/login', async (c) => {
     await authSession.resetAuthFailures(c.env.DB, ip, deviceId);
     const token = await authSession.createSession(c.env.DB, pid, ip, ua, deviceId);
     return c.json({ token, expires_days: 14 });
-  } catch (err) {
-    return c.json({ error: 'Login error', message: err.message }, 500);
-  }
+  } catch (err) { return c.json({ error: 'Login error' }, 500); }
 });
 
 // Secure Routes
