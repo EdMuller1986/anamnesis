@@ -18,7 +18,7 @@ adminTools.get('/integrity', async (c) => {
 
 // GET /api/admin/tools/orphan-check
 adminTools.get('/orphan-check', async (c) => {
-  const pid = c.get('patientId');
+  const pid = c.get('patientId') || 1;
   const results = await Promise.all([
     c.env.DB.prepare('SELECT p.id, p.medication_id FROM prescriptions p LEFT JOIN medications m ON m.id = p.medication_id WHERE p.patient_id = ? AND p.medication_id IS NOT NULL AND m.id IS NULL').bind(pid).all(),
     c.env.DB.prepare('SELECT id, title FROM documents WHERE patient_id = ? AND timeline_id IS NULL AND (source_doctor IS NULL OR source_doctor = "")').bind(pid).all(),
@@ -51,44 +51,27 @@ adminTools.post('/sql', async (c) => {
 // GET /api/admin/tools/search
 adminTools.get('/search', async (c) => {
   const q = c.req.query('q');
-  const pid = c.get('patientId') || 1; // Fallback
-  if (!q) return c.json({ timeline: [], documents: [], comments: [] });
+  const pid = c.get('patientId') || 1;
+  if (!q) return c.json({ timeline: [], documents: [], comments: [], specialists: [], diagnoses: [] });
 
-  // D1 FTS5 MATCH требует экранирования спецсимволов
+  const like = `%${q}%`;
   const ftsQuery = q.replace(/"/g, '""');
 
   try {
-    const [timelineHits, documentHits, commentHits] = await Promise.all([
-      c.env.DB.prepare(`
-        SELECT t.id, t.title, 'timeline' as _type,
-               snippet(timeline_fts, 2, '<mark>', '</mark>', '…', 20) AS snippet
-        FROM timeline_fts
-        JOIN timeline t ON t.id = timeline_fts.rowid
-        WHERE timeline_fts MATCH ? AND t.patient_id = ?
-        LIMIT 10
-      `).bind(ftsQuery, pid).all(),
-      c.env.DB.prepare(`
-        SELECT d.id, d.title, 'document' as _type,
-               snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20) AS snippet
-        FROM documents_fts
-        JOIN documents d ON d.id = documents_fts.rowid
-        WHERE documents_fts MATCH ? AND d.patient_id = ?
-        LIMIT 10
-      `).bind(ftsQuery, pid).all(),
-      c.env.DB.prepare(`
-        SELECT c.id, c.entity_type, c.entity_id, 'comment' as _type,
-               snippet(comments_fts, 0, '<mark>', '</mark>', '…', 20) AS snippet
-        FROM comments_fts
-        JOIN comments c ON c.id = comments_fts.rowid
-        WHERE comments_fts MATCH ? AND c.patient_id = ?
-        LIMIT 10
-      `).bind(ftsQuery, pid).all()
+    const [timelineHits, documentHits, commentHits, specialistHits, diagnosisHits] = await Promise.all([
+      c.env.DB.prepare(`SELECT t.id, t.title, 'timeline' as _type, snippet(timeline_fts, 2, '<mark>', '</mark>', '…', 20) AS snippet FROM timeline_fts JOIN timeline t ON t.id = timeline_fts.rowid WHERE timeline_fts MATCH ? AND t.patient_id = ? LIMIT 10`).bind(ftsQuery, pid).all(),
+      c.env.DB.prepare(`SELECT d.id, d.title, 'document' as _type, snippet(documents_fts, 1, '<mark>', '</mark>', '…', 20) AS snippet FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid WHERE documents_fts MATCH ? AND d.patient_id = ? LIMIT 10`).bind(ftsQuery, pid).all(),
+      c.env.DB.prepare(`SELECT c.id, c.entity_type as _type, c.entity_id, snippet(comments_fts, 0, '<mark>', '</mark>', '…', 20) AS snippet FROM comments_fts JOIN comments c ON c.id = comments_fts.rowid WHERE comments_fts MATCH ? AND c.patient_id = ? LIMIT 10`).bind(ftsQuery, pid).all(),
+      c.env.DB.prepare("SELECT id, full_name as title, 'specialist' as _type FROM specialists WHERE patient_id = ? AND (full_name LIKE ? OR specialization LIKE ? OR clinic LIKE ?) LIMIT 10").bind(pid, like, like, like).all(),
+      c.env.DB.prepare("SELECT id, name as title, 'diagnosis' as _type FROM diagnoses WHERE patient_id = ? AND (name LIKE ? OR icd_code LIKE ?) LIMIT 10").bind(pid, like, like).all()
     ]);
 
     return c.json({
       timeline: timelineHits.results,
       documents: documentHits.results,
-      comments: commentHits.results
+      comments: commentHits.results.map(r => ({ id: r.entity_id, title: `Комментарий к ${r._type}`, _type: 'comment' })),
+      specialists: specialistHits.results,
+      diagnoses: diagnosisHits.results
     });
   } catch (err) {
     console.error('Search error:', err);
