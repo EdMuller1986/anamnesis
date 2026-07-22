@@ -5,7 +5,7 @@ const search = new Hono();
 /**
  * GET /api/search?q=текст
  * Поиск по всем разделам медкарты.
- * Использует LIKE для широкого охвата всех сущностей.
+ * Использует FTS5 для контента и LIKE для справочников.
  */
 search.get('/', async (c) => {
   const q = (c.req.query('q') || '').trim();
@@ -16,57 +16,25 @@ search.get('/', async (c) => {
   }
 
   const like = `%${q}%`;
+  const ftsQuery = q.replace(/"/g, '""');
   const results = [];
 
   try {
-    // 1. Диагнозы
-    const diagnoses = await c.env.DB.prepare(
-      `SELECT id, name, icd_code, status, 'diagnosis' as _type 
-       FROM diagnoses WHERE patient_id = ? AND (name LIKE ? OR icd_code LIKE ? OR detail LIKE ?) LIMIT 10`
-    ).bind(pid, like, like, like).all();
-    results.push(...diagnoses.results.map(r => ({ ...r, title: r.name })));
+    // 1. Поиск по справочникам (LIKE)
+    const [diagnoses, specialists, medications] = await Promise.all([
+      c.env.DB.prepare(`SELECT id, name as title, 'diagnosis' as _type FROM diagnoses WHERE patient_id = ? AND (name LIKE ? OR icd_code LIKE ?) LIMIT 5`).bind(pid, like, like).all(),
+      c.env.DB.prepare(`SELECT id, full_name as title, 'specialist' as _type FROM specialists WHERE patient_id = ? AND (full_name LIKE ? OR specialization LIKE ?) LIMIT 5`).bind(pid, like, like).all(),
+      c.env.DB.prepare(`SELECT id, name as title, 'medication' as _type FROM medications WHERE patient_id = ? AND name LIKE ? LIMIT 5`).bind(pid, like).all()
+    ]);
+    results.push(...diagnoses.results, ...specialists.results, ...medications.results);
 
-    // 2. Лекарства
-    const medications = await c.env.DB.prepare(
-      `SELECT id, name, dosage, status, 'medication' as _type 
-       FROM medications WHERE patient_id = ? AND (name LIKE ? OR dosage LIKE ? OR detail LIKE ?) LIMIT 10`
-    ).bind(pid, like, like, like).all();
-    results.push(...medications.results.map(r => ({ ...r, title: r.name })));
-
-    // 3. Специалисты
-    const specialists = await c.env.DB.prepare(
-      `SELECT id, full_name as name, specialization, 'specialist' as _type 
-       FROM specialists WHERE patient_id = ? AND (full_name LIKE ? OR specialization LIKE ? OR clinic LIKE ?) LIMIT 10`
-    ).bind(pid, like, like, like).all();
-    results.push(...specialists.results.map(r => ({ ...r, title: r.name })));
-
-    // 4. Таймлайн
-    const timeline = await c.env.DB.prepare(
-      `SELECT id, title as name, category, 'timeline' as _type 
-       FROM timeline WHERE patient_id = ? AND (title LIKE ? OR description LIKE ? OR transcription LIKE ?) LIMIT 10`
-    ).bind(pid, like, like, like).all();
-    results.push(...timeline.results.map(r => ({ ...r, title: r.name })));
-
-    // 5. План
-    const plan = await c.env.DB.prepare(
-      `SELECT id, title as name, priority as status, 'plan' as _type 
-       FROM plan WHERE patient_id = ? AND (title LIKE ? OR detail LIKE ?) LIMIT 10`
-    ).bind(pid, like, like).all();
-    results.push(...plan.results.map(r => ({ ...r, title: r.name })));
-
-    // 6. Документы
-    const documents = await c.env.DB.prepare(
-      `SELECT id, title as name, category, 'document' as _type 
-       FROM documents WHERE patient_id = ? AND (title LIKE ? OR notes LIKE ? OR transcription LIKE ?) LIMIT 10`
-    ).bind(pid, like, like, like).all();
-    results.push(...documents.results.map(r => ({ ...r, title: r.name })));
-
-    // 7. Прививки
-    const vaccinations = await c.env.DB.prepare(
-      `SELECT id, name, status, 'vaccination' as _type 
-       FROM vaccinations WHERE patient_id = ? AND (name LIKE ? OR vaccine_name LIKE ? OR notes LIKE ?) LIMIT 10`
-    ).bind(pid, like, like, like).all();
-    results.push(...vaccinations.results.map(r => ({ ...r, title: r.name })));
+    // 2. Поиск по контенту (FTS5)
+    const [timeline, documents, comments] = await Promise.all([
+      c.env.DB.prepare(`SELECT t.id, t.title, 'timeline' as _type FROM timeline_fts JOIN timeline t ON t.id = timeline_fts.rowid WHERE timeline_fts MATCH ? AND t.patient_id = ? LIMIT 5`).bind(ftsQuery, pid).all(),
+      c.env.DB.prepare(`SELECT d.id, d.title, 'document' as _type FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid WHERE documents_fts MATCH ? AND d.patient_id = ? LIMIT 5`).bind(ftsQuery, pid).all(),
+      c.env.DB.prepare(`SELECT c.id, c.entity_type as _type, c.entity_id FROM comments_fts JOIN comments c ON c.id = comments_fts.rowid WHERE comments_fts MATCH ? AND c.patient_id = ? LIMIT 5`).bind(ftsQuery, pid).all()
+    ]);
+    results.push(...timeline.results, ...documents.results, ...commentHits(comments.results));
 
     return c.json(results);
   } catch (err) {
@@ -74,5 +42,9 @@ search.get('/', async (c) => {
     return c.json({ error: 'Search failed', message: err.message }, 500);
   }
 });
+
+function commentHits(rows) {
+  return rows.map(r => ({ id: r.entity_id, title: `Комментарий к ${r._type}`, _type: 'comment' }));
+}
 
 export default search;
