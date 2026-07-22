@@ -52,23 +52,21 @@ const getMeta = (c) => ({
 const authMiddleware = async (c, next) => {
   const path = c.req.path;
   
-  // Public and Admin paths are skipped by user session auth
   const skipPaths = [
     '/api/auth/login',
     '/api/auth/check',
     '/api/health',
     '/api/version',
-    '/api/webauthn/available'
+    '/api/webauthn/available',
+    '/api/export/pdf' // Skip main auth for export, it has internal token check
   ];
 
   if (skipPaths.some(p => path === p || path.startsWith('/api/webauthn/login') || path.startsWith('/api/admin/'))) {
     return await next();
   }
 
-  // Support token from headers, cookies OR query parameter (for file exports)
   const token = c.req.header('X-Session-Token') || 
                 c.req.header('Authorization')?.replace('Bearer ', '') || 
-                c.req.query('token') ||
                 getCookie(c, 'session');
 
   if (!token) return c.json({ error: 'Unauthorized' }, 401);
@@ -76,8 +74,8 @@ const authMiddleware = async (c, next) => {
   const session = await authSession.getSession(c.env.DB, token);
   if (!session) return c.json({ error: 'Unauthorized' }, 401);
 
-  const ip = c.req.header('cf-connecting-ip') || '0.0.0.0';
-  c.executionCtx.waitUntil(authSession.touchSession(c.env.DB, token, ip));
+  const meta = getMeta(c);
+  c.executionCtx.waitUntil(authSession.touchSession(c.env.DB, token, meta.ip));
 
   c.set('patientId', session.patient_id);
   c.set('session', session);
@@ -85,6 +83,57 @@ const authMiddleware = async (c, next) => {
 };
 
 app.use('/api/*', authMiddleware);
+
+// --- Export Logic ---
+function esc(text) {
+  if (!text && text !== 0) return '';
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? dateStr : d.toLocaleDateString('ru-RU');
+}
+
+app.get('/api/export/pdf', async (c) => {
+  const token = c.req.query('token');
+  const pid = parseInt(c.req.query('patient_id') || '1', 10);
+  
+  if (!token) return c.text('Unauthorized', 401);
+  const session = await authSession.getSession(c.env.DB, token);
+  if (!session || session.patient_id !== pid) return c.text('Unauthorized', 401);
+
+  // Fetch data
+  const [p, ds, ms, ts, pl, er, ss, rm, vs, gl, lr, cm] = await Promise.all([
+    c.env.DB.prepare('SELECT * FROM patient WHERE id = ?').bind(pid).first(),
+    c.env.DB.prepare('SELECT * FROM diagnoses WHERE patient_id = ? ORDER BY status ASC, created_at DESC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM medications WHERE patient_id = ? ORDER BY status ASC, created_at DESC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM timeline WHERE patient_id = ? ORDER BY event_date DESC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM plan WHERE patient_id = ? ORDER BY created_at DESC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM medical_errors WHERE patient_id = ? ORDER BY created_at DESC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM specialists WHERE patient_id = ? ORDER BY specialization ASC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM reminders WHERE patient_id = ? ORDER BY remind_at ASC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM vaccinations WHERE patient_id = ? ORDER BY scheduled_date ASC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM growth_log WHERE patient_id = ? ORDER BY measured_at DESC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM lab_results WHERE patient_id = ? ORDER BY test_date DESC').bind(pid).all(),
+    c.env.DB.prepare('SELECT * FROM comments WHERE patient_id = ? ORDER BY created_at DESC').bind(pid).all(),
+  ]);
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Отчёт: ${esc(p.full_name)}</title>
+<style>body{font-family:sans-serif;max-width:800px;margin:20px auto;padding:20px;line-height:1.4;}h1{border-bottom:2px solid #007AFF;} .section{margin-top:20px;padding:10px;background:#f9f9f9;border-radius:8px;} table{width:100%;border-collapse:collapse;margin:10px 0;}th,td{border:1px solid #ddd;padding:8px;text-align:left;}</style>
+</head><body>
+<h1>Медицинский отчёт</h1>
+<div class="section"><strong>Пациент:</strong> ${esc(p.full_name)}<br><strong>Дата рождения:</strong> ${formatDate(p.date_of_birth)}<br><strong>Пол:</strong> ${esc(p.gender)}</div>
+<h2>Диагнозы</h2><table><tr><th>Название</th><th>Статус</th></tr>${ds.results.map(d=>`<tr><td>${esc(d.name)}</td><td>${esc(d.status)}</td></tr>`).join('')}</table>
+<h2>Лекарства</h2><table><tr><th>Название</th><th>Дозировка</th><th>Статус</th></tr>${ms.results.map(m=>`<tr><td>${esc(m.name)}</td><td>${esc(m.dosage)}</td><td>${esc(m.status)}</td></tr>`).join('')}</table>
+<p style="color:#666;font-size:12px;margin-top:40px;">Сформировано автоматически в Anamnesis Serverless</p>
+</body></html>`;
+
+  return c.html(html, 200, {
+    'Content-Type': 'text/html; charset=UTF-8',
+    'Content-Disposition': `attachment; filename="report_${pid}.html"`
+  });
+});
 
 // Admin Auth Middleware
 app.use('/api/admin/*', async (c, next) => {
@@ -100,11 +149,6 @@ app.get('/api/health', (c) => c.json({ status: 'ok', db: 'connected' }));
 app.get('/api/version', (c) => c.json({ version: '2.0.0-serverless', build: 'cf-workers' }));
 app.get('/api/webauthn/available', (c) => c.json({ available: false }));
 app.get('/api/auth/security-status', (c) => c.json({ webauthn_enabled: false, lockout_active: false }));
-
-// Export Route Stub
-app.get('/api/export/pdf', (c) => {
-  return c.text('PDF Export is not yet implemented in the Cloudflare version. We are working on it!', 200);
-});
 
 // Auth
 app.post('/api/auth/login', async (c) => {
@@ -126,7 +170,6 @@ app.post('/api/auth/login', async (c) => {
       return c.json({ error: 'Invalid PIN', attempts: fail.attempts }, 401);
     }
 
-    await authSession.resetAuthFailures(c.env.DB, pid === 1 ? null : ip, deviceId); // simplified reset
     await authSession.resetAuthFailures(c.env.DB, ip, deviceId);
     const token = await authSession.createSession(c.env.DB, pid, ip, ua, deviceId);
     return c.json({ token, expires_days: 14 });
