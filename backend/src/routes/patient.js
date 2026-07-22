@@ -5,7 +5,7 @@ const patient = new Hono();
 // GET /api/patient/list
 patient.get('/list', async (c) => {
   const { results } = await c.env.DB.prepare(
-    'SELECT id, name, birth_date, gender, created_at FROM patient ORDER BY id'
+    'SELECT * FROM patient ORDER BY id'
   ).all();
   return c.json(results);
 });
@@ -24,13 +24,35 @@ patient.get('/', async (c) => {
 // POST /api/patient
 patient.post('/', async (c) => {
   const body = await c.req.json();
-  const { name, birth_date, gender } = body;
+  const { 
+    full_name, name, 
+    date_of_birth, birth_date, 
+    gender, city, allergies, 
+    current_height_cm, current_weight_kg, birth_weight_g, 
+    notes 
+  } = body;
 
-  if (!name) return c.json({ error: 'Name is required' }, 400);
+  const finalName = full_name || name;
+  const finalBirthDate = date_of_birth || birth_date;
 
-  const { results } = await c.env.DB.prepare(
-    'INSERT INTO patient (name, birth_date, gender) VALUES (?, ?, ?) RETURNING *'
-  ).bind(name, birth_date || null, gender || null).all();
+  if (!finalName) return c.json({ error: 'Name is required' }, 400);
+
+  const { results } = await c.env.DB.prepare(`
+    INSERT INTO patient (
+      full_name, name, 
+      date_of_birth, birth_date, 
+      gender, city, allergies, 
+      current_height_cm, current_weight_kg, birth_weight_g, 
+      notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
+    RETURNING *
+  `).bind(
+    finalName, finalName, 
+    finalBirthDate || null, finalBirthDate || null, 
+    gender || null, city || null, allergies || null,
+    current_height_cm || null, current_weight_kg || null, birth_weight_g || null,
+    notes || null
+  ).all();
 
   return c.json(results[0], 201);
 });
