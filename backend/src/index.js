@@ -65,8 +65,10 @@ const authMiddleware = async (c, next) => {
     return await next();
   }
 
+  // Support token from headers, cookies OR query parameter (for file exports)
   const token = c.req.header('X-Session-Token') || 
                 c.req.header('Authorization')?.replace('Bearer ', '') || 
+                c.req.query('token') ||
                 getCookie(c, 'session');
 
   if (!token) return c.json({ error: 'Unauthorized' }, 401);
@@ -74,8 +76,8 @@ const authMiddleware = async (c, next) => {
   const session = await authSession.getSession(c.env.DB, token);
   if (!session) return c.json({ error: 'Unauthorized' }, 401);
 
-  const meta = getMeta(c);
-  c.executionCtx.waitUntil(authSession.touchSession(c.env.DB, token, meta.ip));
+  const ip = c.req.header('cf-connecting-ip') || '0.0.0.0';
+  c.executionCtx.waitUntil(authSession.touchSession(c.env.DB, token, ip));
 
   c.set('patientId', session.patient_id);
   c.set('session', session);
@@ -99,6 +101,11 @@ app.get('/api/version', (c) => c.json({ version: '2.0.0-serverless', build: 'cf-
 app.get('/api/webauthn/available', (c) => c.json({ available: false }));
 app.get('/api/auth/security-status', (c) => c.json({ webauthn_enabled: false, lockout_active: false }));
 
+// Export Route Stub
+app.get('/api/export/pdf', (c) => {
+  return c.text('PDF Export is not yet implemented in the Cloudflare version. We are working on it!', 200);
+});
+
 // Auth
 app.post('/api/auth/login', async (c) => {
   const { pin } = await c.req.json();
@@ -119,6 +126,7 @@ app.post('/api/auth/login', async (c) => {
       return c.json({ error: 'Invalid PIN', attempts: fail.attempts }, 401);
     }
 
+    await authSession.resetAuthFailures(c.env.DB, pid === 1 ? null : ip, deviceId); // simplified reset
     await authSession.resetAuthFailures(c.env.DB, ip, deviceId);
     const token = await authSession.createSession(c.env.DB, pid, ip, ua, deviceId);
     return c.json({ token, expires_days: 14 });
