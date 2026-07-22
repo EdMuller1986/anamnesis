@@ -50,21 +50,10 @@ const renderers = {
         ref_id: row.entity_id,
       };
     }
-    if (row.action === 'delete') {
-      return {
-        icon: 'IconStethoscope',
-        color: 'red',
-        title: `Удалён визит «${title}»`,
-        subtitle: eventDate && formatDate(eventDate),
-        ref_kind: null,
-        ref_id: null,
-      };
-    }
-    const changed = diffKeys(ov, nv);
     return {
-      icon: changed.includes('ai_assessment') ? 'IconBrain' : 'IconStethoscope',
-      color: changed.includes('ai_assessment') ? 'purple' : 'blue',
-      title: `${changed.includes('ai_assessment') ? 'AI-оценка' : 'Обновлён'} визит «${title}»`,
+      icon: 'IconStethoscope',
+      color: 'blue',
+      title: `Обновлён визит «${title}»`,
       subtitle: [specName, eventDate && formatDate(eventDate)].filter(Boolean).join(' • '),
       ref_kind: 'timeline',
       ref_id: row.entity_id,
@@ -75,32 +64,12 @@ const renderers = {
     const nv = safeParseJson(row.new_value);
     const ov = safeParseJson(row.old_value);
     const title = nv?.title || ov?.title || 'Документ';
-    const timelineId = nv?.timeline_id || ov?.timeline_id;
-
-    if (row.action === 'insert') {
-      return {
-        icon: 'IconFileText',
-        color: 'green',
-        title: `Добавлен документ «${title}»`,
-        subtitle: nv?.category,
-        ref_kind: timelineId ? 'timeline' : 'document',
-        ref_id: timelineId || row.entity_id,
-      };
-    }
-    if (row.action === 'delete') {
-      return {
-        icon: 'IconFileText',
-        color: 'red',
-        title: `Удалён документ «${title}»`,
-        ref_kind: null,
-      };
-    }
     return {
       icon: 'IconFileText',
-      color: 'blue',
-      title: `Обновлён документ «${title}»`,
-      ref_kind: 'timeline',
-      ref_id: timelineId || row.entity_id,
+      color: row.action === 'insert' ? 'green' : 'blue',
+      title: `${row.action === 'insert' ? 'Добавлен' : 'Обновлён'} документ «${title}»`,
+      ref_kind: 'document',
+      ref_id: row.entity_id,
     };
   },
 
@@ -108,22 +77,10 @@ const renderers = {
     const nv = safeParseJson(row.new_value);
     const ov = safeParseJson(row.old_value);
     const name = nv?.name || ov?.name || 'Диагноз';
-
-    if (row.action === 'insert') {
-      return {
-        icon: 'IconClipboardList',
-        color: 'green',
-        title: `Новый диагноз «${name}»`,
-        subtitle: nv?.icd_code ? `Код: ${nv.icd_code}` : '',
-        ref_kind: 'diagnoses',
-        ref_id: row.entity_id,
-      };
-    }
-    const changed = diffKeys(ov, nv);
     return {
       icon: 'IconClipboardList',
-      color: 'blue',
-      title: `Обновлён диагноз «${name}»`,
+      color: row.action === 'insert' ? 'green' : 'blue',
+      title: `${row.action === 'insert' ? 'Новый' : 'Обновлён'} диагноз «${name}»`,
       ref_kind: 'diagnoses',
       ref_id: row.entity_id,
     };
@@ -133,20 +90,10 @@ const renderers = {
     const nv = safeParseJson(row.new_value);
     const ov = safeParseJson(row.old_value);
     const name = nv?.name || ov?.name || 'Препарат';
-
-    if (row.action === 'insert') {
-      return {
-        icon: 'IconPill',
-        color: 'green',
-        title: `Новый препарат «${name}»`,
-        ref_kind: 'medication',
-        ref_id: row.entity_id,
-      };
-    }
     return {
       icon: 'IconPill',
-      color: 'blue',
-      title: `Обновлён препарат «${name}»`,
+      color: row.action === 'insert' ? 'green' : 'blue',
+      title: `${row.action === 'insert' ? 'Новый' : 'Обновлён'} препарат «${name}»`,
       ref_kind: 'medication',
       ref_id: row.entity_id,
     };
@@ -156,54 +103,24 @@ const renderers = {
     const nv = safeParseJson(row.new_value);
     const ov = safeParseJson(row.old_value);
     const title = nv?.title || ov?.title || 'Пункт плана';
-
-    if (row.action === 'insert') {
-      return {
-        icon: 'IconListCheck',
-        color: 'green',
-        title: `План: «${title}»`,
-        ref_kind: 'plan',
-        ref_id: row.entity_id,
-      };
-    }
-    if (nv?.status === 'done' && ov?.status !== 'done') {
-      return {
-        icon: 'IconCheck',
-        color: 'green',
-        title: `Выполнено: «${title}»`,
-        ref_kind: 'plan',
-        ref_id: row.entity_id,
-      };
-    }
     return {
       icon: 'IconListCheck',
-      color: 'blue',
-      title: `Обновлён план: «${title}»`,
+      color: row.action === 'insert' ? 'green' : 'blue',
+      title: `${row.action === 'insert' ? 'Добавлен план' : 'Обновлён план'}: «${title}»`,
       ref_kind: 'plan',
       ref_id: row.entity_id,
     };
   },
 
-  lab_result: (row) => {
+  specialist: (row) => {
     const nv = safeParseJson(row.new_value);
     const ov = safeParseJson(row.old_value);
-    const parameter = nv?.parameter || ov?.parameter || 'Анализ';
-    const value = nv?.value ?? ov?.value;
-
-    if (row.action === 'insert') {
-      return {
-        icon: 'IconFlask',
-        color: 'green',
-        title: `Анализ: ${parameter} ${value ?? ''}`,
-        ref_kind: 'lab',
-        ref_id: row.entity_id,
-      };
-    }
+    const name = nv?.full_name || ov?.full_name || 'Специалист';
     return {
-      icon: 'IconFlask',
-      color: 'blue',
-      title: `Обновлён анализ: ${parameter}`,
-      ref_kind: 'lab',
+      icon: 'IconUserHeart',
+      color: row.action === 'insert' ? 'green' : 'blue',
+      title: `${row.action === 'insert' ? 'Добавлен' : 'Обновлён'} специалист: ${name}`,
+      ref_kind: 'specialist',
       ref_id: row.entity_id,
     };
   }
@@ -229,7 +146,7 @@ export async function renderHistory(rows) {
     };
   }).filter(Boolean);
 
-  // Группировка по датам
+  // Группировка по датам (как ждет HistoryModal)
   const groups = [];
   entries.forEach(entry => {
     const date = entry.at.split(' ')[0];
