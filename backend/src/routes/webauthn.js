@@ -101,7 +101,7 @@ webauthn.post('/register/verify', async (c) => {
     }
 
     const { credential, credentialBackedUp, credentialDeviceType } = verification.registrationInfo;
-    const publicKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(credential.publicKey)));
+    const publicKeyBase64 = Buffer.from(credential.publicKey).toString('base64');
 
     await db.prepare(`
       INSERT INTO webauthn_credentials
@@ -208,7 +208,7 @@ webauthn.post('/login/verify', async (c) => {
       expectedRPID: c.env.WEBAUTHN_RP_ID || 'localhost',
       credential: {
         id: credentialRow.credential_id,
-        publicKey: new Uint8Array(atob(credentialRow.public_key).split('').map(c => c.charCodeAt(0))),
+        publicKey: new Uint8Array(Buffer.from(credentialRow.public_key, 'base64')),
         counter: credentialRow.counter,
       },
       requireUserVerification: true,

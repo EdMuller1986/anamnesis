@@ -41,6 +41,7 @@ jobs:
           name = "anamnesis-backend"
           main = "src/index.js"
           compatibility_date = "2024-05-02"
+          compatibility_flags = ["nodejs_compat"]
 
           [[d1_databases]]
           binding = "DB"
