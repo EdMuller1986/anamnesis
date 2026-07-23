@@ -57,7 +57,7 @@ export default function UploadDocumentModal() {
       file,
       title: title.trim() || file.name,
       category,
-      notes: notes.trim() || undefined,
+      notes: notes.trim() || "",
       timeline_id: timelineId ? Number(timelineId) : null,
     });
     closeModal();

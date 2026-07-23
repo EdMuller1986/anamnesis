@@ -66,7 +66,7 @@ async function request<T>(
         ? (body as FormData)
         : body !== undefined
           ? JSON.stringify(body)
-          : undefined,
+          : null,
     });
   } catch (err) {
     // Сеть упала — возвращаем «сетевую» ApiError со статусом 0.

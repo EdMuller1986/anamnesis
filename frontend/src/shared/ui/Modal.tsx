@@ -112,7 +112,7 @@ export function Modal({
       onClose={handleClose}
       title={title}
       footer={footer}
-      disableSwipeClose={disableSwipeClose}
+      disableSwipeClose={disableSwipeClose ?? false}
     >
       {children}
     </Sheet>

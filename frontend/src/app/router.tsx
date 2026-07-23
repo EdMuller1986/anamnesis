@@ -32,6 +32,11 @@ import { HealthGraphPage } from '@/features/health-graph/HealthGraphPage';
 
 const basename = import.meta.env.BASE_URL.replace(/\/$/, '') || '/';
 
+const routerOpts: { basename?: string } = {};
+if (basename !== '/') {
+  routerOpts.basename = basename;
+}
+
 /**
  * Все роуты приложения.
  *
@@ -107,7 +112,5 @@ export const router = createBrowserRouter(
 
     { path: '*', element: <Navigate to="/dashboard" replace /> },
   ],
-  {
-    basename: basename === '/' ? undefined : basename,
-  }
+  routerOpts
 );
