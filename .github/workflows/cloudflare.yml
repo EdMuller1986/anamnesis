@@ -59,7 +59,7 @@ jobs:
           fi
 
           echo "Checking D1 Database Access..."
-          DB_INFO=$(npx wrangler@3 d1 list --remote --json)
+          DB_INFO=$(npx wrangler@3 d1 list --json)
           if [ $? -ne 0 ]; then
             echo "::error::Failed to list D1 databases."
             echo "$DB_INFO"
