@@ -53,3 +53,4 @@ npm-debug.log*
 # Working materials (scan drop folders etc)
 Расшифровки/
 ответы.txt
+backend/wrangler.toml
