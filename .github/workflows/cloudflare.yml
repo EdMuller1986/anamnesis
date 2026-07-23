@@ -18,8 +18,38 @@ on:
         type: boolean
 
 jobs:
+  validate-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required secrets
+        run: |
+          MISSING=0
+          check_secret() {
+            if [ -z "${1}" ]; then
+              echo "❌ Error: Secret ${2} is missing!"
+              MISSING=1
+            else
+              echo "✅ Secret ${2} is present."
+            fi
+          }
+
+          check_secret "${{ secrets.CLOUDFLARE_API_TOKEN }}" "CLOUDFLARE_API_TOKEN"
+          check_secret "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" "CLOUDFLARE_ACCOUNT_ID"
+          check_secret "${{ secrets.D1_DATABASE_ID }}" "D1_DATABASE_ID"
+          check_secret "${{ secrets.B2_ENDPOINT }}" "B2_ENDPOINT"
+          check_secret "${{ secrets.B2_BUCKET_NAME }}" "B2_BUCKET_NAME"
+          check_secret "${{ secrets.B2_KEY_ID }}" "B2_KEY_ID"
+          check_secret "${{ secrets.B2_APPLICATION_KEY }}" "B2_APPLICATION_KEY"
+          check_secret "${{ secrets.VITE_API_URL }}" "VITE_API_URL"
+          
+          if [ $MISSING -eq 1 ]; then
+            echo "::error::One or more required secrets are missing. Please configure them in Settings > Secrets > Actions."
+            exit 1
+          fi
+
   deploy-backend:
     runs-on: ubuntu-latest
+    needs: validate-secrets
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy_backend == 'true') }}
     steps:
       - uses: actions/checkout@v4
