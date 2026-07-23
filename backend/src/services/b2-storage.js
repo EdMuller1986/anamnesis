@@ -5,12 +5,21 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
  * Инициализация S3 клиента для Cloudflare Workers.
  */
 const getS3Client = (env) => {
+  // Очищаем эндпоинт от протокола, если он там есть
+  const cleanEndpoint = (env.B2_ENDPOINT || '').replace(/^https?:\/\//, '');
+
   // Для Backblaze B2 регион обычно берется из эндпоинта, например 'us-east-005'
-  const region = env.B2_ENDPOINT.split('.')[1] || 'us-east-005';
-  
+  const region = cleanEndpoint.split('.')[1] || 'us-east-005';
+
+  if (!env.B2_KEY_ID || !env.B2_APPLICATION_KEY) {
+    console.error('B2 Credentials missing in environment');
+  } else {
+    console.log(`B2 Config: endpoint=${cleanEndpoint}, region=${region}, keyIdLength=${env.B2_KEY_ID.length}`);
+  }
+
   return new S3Client({
     region: region,
-    endpoint: `https://${env.B2_ENDPOINT}`,
+    endpoint: `https://${cleanEndpoint}`,
     credentials: {
       accessKeyId: env.B2_KEY_ID,
       secretAccessKey: env.B2_APPLICATION_KEY,
