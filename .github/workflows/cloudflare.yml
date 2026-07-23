@@ -52,22 +52,24 @@ jobs:
 
       - name: Functional Check - Cloudflare & D1
         run: |
-          echo "Testing Cloudflare API and D1 database access..."
-          
-          # Получаем список БД в формате JSON для надежного поиска
-          DB_LIST=$(npx wrangler@3 d1 list --remote --json 2>&1)
-          EXIT_CODE=$?
-          
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo "::error::Wrangler command failed with exit code $EXIT_CODE."
-            echo "Possible causes: Invalid CLOUDFLARE_API_TOKEN or incorrect CLOUDFLARE_ACCOUNT_ID."
-            echo "Details: $DB_LIST"
+          echo "Verifying Cloudflare Token and Account..."
+          if ! npx wrangler@3 whoami; then
+            echo "::error::Cloudflare Token or Account ID is invalid."
             exit 1
           fi
 
-          if ! echo "$DB_LIST" | grep -q "${{ secrets.D1_DATABASE_ID }}"; then
-            echo "::error::D1_DATABASE_ID not found in the account's database list."
-            echo "Please verify that the Database ID exists in your Cloudflare dashboard."
+          echo "Checking D1 Database Access..."
+          DB_INFO=$(npx wrangler@3 d1 list --remote --json)
+          if [ $? -ne 0 ]; then
+            echo "::error::Failed to list D1 databases."
+            echo "$DB_INFO"
+            exit 1
+          fi
+
+          if ! echo "$DB_INFO" | grep -q "${{ secrets.D1_DATABASE_ID }}"; then
+            echo "::error::D1_DATABASE_ID (${{ secrets.D1_DATABASE_ID }}) not found in your Cloudflare account."
+            echo "Available databases:"
+            echo "$DB_INFO" | jq -r '.[] | "- \(.name) (\(.uuid))"' || echo "$DB_INFO"
             exit 1
           fi
           
@@ -79,18 +81,17 @@ jobs:
       - name: Functional Check - Backblaze B2
         run: |
           echo "Checking Backblaze B2 connectivity..."
-          # Очищаем эндпоинт и извлекаем регион
           CLEAN_ENDPOINT=$(echo "${{ secrets.B2_ENDPOINT }}" | sed -E 's/^https?:\/\///')
           REGION=$(echo "$CLEAN_ENDPOINT" | cut -d. -f2)
           
-          # Устанавливаем AWS CLI для теста (он есть в ubuntu-latest)
-          # Используем команду HEAD на бакет для проверки доступа
           export AWS_ACCESS_KEY_ID="${{ secrets.B2_KEY_ID }}"
           export AWS_SECRET_ACCESS_KEY="${{ secrets.B2_APPLICATION_KEY }}"
           export AWS_DEFAULT_REGION="$REGION"
           
           if ! aws s3api head-bucket --bucket "${{ secrets.B2_BUCKET_NAME }}" --endpoint-url "https://$CLEAN_ENDPOINT" 2>&1; then
-            echo "::error::Backblaze B2 Auth Failed. Check B2_KEY_ID, B2_APPLICATION_KEY and B2_BUCKET_NAME."
+            echo "::error::Backblaze B2 connection failed. Check credentials, bucket name, and endpoint."
+            # Show the error message from AWS CLI
+            aws s3api head-bucket --bucket "${{ secrets.B2_BUCKET_NAME }}" --endpoint-url "https://$CLEAN_ENDPOINT" || true
             exit 1
           fi
           echo "✅ Backblaze B2 Connectivity OK"
