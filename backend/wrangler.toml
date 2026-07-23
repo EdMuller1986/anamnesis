@@ -2,14 +2,19 @@ name = "anamnesis-backend"
 main = "src/index.js"
 compatibility_date = "2024-05-02"
 
+# D1 Database binding
+# Get database_id by running: wrangler d1 create anamnesis_db
 [[d1_databases]]
 binding = "DB"
 database_name = "anamnesis_db"
-database_id = "f5dcfead-71f4-46e1-a1c7-32902c6db311"
+database_id = "REPLACE_WITH_YOUR_DATABASE_ID"
 
-# B2 Credentials
+# Environment variables and secrets
+# Create these via GitHub Secrets and wrangler secret put
 [vars]
-CORS_ORIGINS = "*"
-B2_ENDPOINT = "s3.us-east-005.backblazeb2.com"
-B2_BUCKET_NAME = "anamnezis"
-B2_KEY_ID = "1747a8c37830"
+CORS_ORIGINS = "https://yourdomain.com"  # Set to your domain in production
+
+# Secrets (use: wrangler secret put <KEY>)
+# B2_KEY_ID - from Backblaze B2
+# B2_APPLICATION_KEY - from Backblaze B2
+# ADMIN_TOKEN - generate with: openssl rand -hex 32

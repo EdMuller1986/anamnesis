@@ -8,7 +8,8 @@ node_modules/
 
 # Local configuration with real secrets
 *.local
-wrangler.toml.local
+backend/wrangler.toml
+backend/wrangler.toml.local
 _redirects.local
 
 # Build output
