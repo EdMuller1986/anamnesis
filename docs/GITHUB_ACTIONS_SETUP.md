@@ -1,227 +1,152 @@
 # GitHub Actions Setup Guide
 
-This guide explains how to set up automatic deployment to Cloudflare via GitHub Actions.
+This document explains how to configure GitHub Actions for deploying Anamnesis to Cloudflare.
 
 ## Prerequisites
 
-1. Cloudflare account with Workers and Pages enabled
-2. GitHub repository with push access
-3. `wrangler.toml.local` configured locally (DO NOT commit this file)
+1. **Cloudflare Account** with Workers and D1 enabled
+2. **Backblaze B2 Account** for file storage
+3. **GitHub Repository** with admin access
 
----
-
-## Step 1: Get Cloudflare Credentials
-
-### 1.1 Get API Token
-
-1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens)
-2. Click **"Create Token"**
-3. Use template **"Edit Cloudflare Workers"** or create custom with:
-   - Permissions:
-     - `Account` → `Cloudflare Pages` → `Edit`
-     - `Account` → `Workers Scripts` → `Edit`
-     - `Account` → `D1` → `Edit`
-   - Account Resources: `Include` → Your account
-4. Click **"Continue to summary"** → **"Create Token"**
-5. **Copy the token** (you'll need it for GitHub secrets)
-
-### 1.2 Get Account ID
+## Step 1: Create Cloudflare API Token
 
 1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/)
-2. Select your account
-3. Scroll down in the right sidebar
-4. Copy **Account ID**
+2. Account Home → API Tokens → Create Token
+3. Use template: **"Edit Cloudflare Workers"**
+4. Permissions:
+   - `Workers Scripts: Edit`
+   - `D1: Edit`
+   - `Cloudflare Pages: Edit`
+5. Copy the token
 
----
-
-## Step 2: Add Secrets to GitHub
-
-1. Go to your GitHub repository
-2. Navigate to **Settings** → **Secrets and variables** → **Actions**
-3. Click **"New repository secret"** and add:
-
-| Secret Name | Value | Where to get |
-|-------------|-------|--------------|
-| `CLOUDFLARE_API_TOKEN` | `your-api-token` | From Step 1.1 |
-| `CLOUDFLARE_ACCOUNT_ID` | `your-account-id` | From Step 1.2 |
-| `VITE_API_URL` | `https://anamnesis-backend.your-subdomain.workers.dev/api` | Your Workers URL |
-
-**Example VITE_API_URL:**
-```
-https://anamnesis-backend.simulyakrge.workers.dev/api
-```
-
----
-
-## Step 3: Set B2 Secret in Cloudflare (One-Time)
-
-GitHub Actions **cannot** set Cloudflare Workers secrets (they're write-only).
-You need to set it **once manually**:
+## Step 2: Create D1 Database
 
 ```bash
-cd backend
-wrangler login  # If not logged in
-wrangler secret put B2_APPLICATION_KEY --config wrangler.toml.local
-# Paste your B2 application key when prompted
+# Via Cloudflare CLI
+wrangler d1 create anamnesis_db
 ```
 
-This secret is stored in Cloudflare Workers and persists across deployments.
+Note the `database_id` from output.
 
----
+## Step 3: Create Backblaze B2 Application Key
 
-## Step 4: Prepare wrangler.toml.local for CI
+1. Go to [Backblaze B2 Console](https://secure.backblaze.com/)
+2. Buckets → Create a bucket (e.g., `anamnesis-prod-docs`)
+3. App Keys → Create Application Key
+4. Permissions: **Read and Write**
+5. Note down:
+   - Application Key ID (`B2_KEY_ID`)
+   - Application Key Secret (`B2_APPLICATION_KEY`)
+   - Endpoint URL (e.g., `s3.us-west-004.backblazeb2.com`)
 
-**Problem:** GitHub Actions needs `wrangler.toml.local` to deploy, but we don't commit it (it contains secrets).
+## Step 4: Add GitHub Secrets
 
-**Solution:** Use environment variables or create the file in CI.
+Repository Settings → Secrets and variables → Actions → New repository secret
 
-### Option A: Create wrangler.toml.local from GitHub Secrets (Recommended)
+### Secrets (Encrypted)
 
-Add more secrets to GitHub:
-
-| Secret Name | Value | Example |
-|-------------|-------|---------|
-| `D1_DATABASE_ID` | Your D1 database ID | `f5dcfead-71f4-46e1-a1c7-32902c6db311` |
-| `B2_BUCKET_NAME` | Your B2 bucket name | `anamnezis` |
-| `B2_KEY_ID` | Your B2 key ID | `1747a8c37830` |
-| `B2_ENDPOINT` | Your B2 endpoint | `s3.us-east-005.backblazeb2.com` |
-
-Then update `.github/workflows/cloudflare.yml` to create the file:
-
-```yaml
-- name: Create wrangler.toml.local
-  run: |
-    cd backend
-    cat > wrangler.toml.local << EOF
-    name = "anamnesis-backend"
-    main = "src/index.js"
-    compatibility_date = "2024-05-02"
-
-    [[d1_databases]]
-    binding = "DB"
-    database_name = "anamnesis_db"
-    database_id = "${{ secrets.D1_DATABASE_ID }}"
-
-    [vars]
-    CORS_ORIGINS = "*"
-    B2_ENDPOINT = "${{ secrets.B2_ENDPOINT }}"
-    B2_BUCKET_NAME = "${{ secrets.B2_BUCKET_NAME }}"
-    B2_KEY_ID = "${{ secrets.B2_KEY_ID }}"
-    EOF
-
-- name: Deploy Worker
-  uses: cloudflare/wrangler-action@v3
-  with:
-    apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-    accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-    workingDirectory: backend
-    command: deploy --config wrangler.toml.local
+```
+CLOUDFLARE_API_TOKEN      → Paste Cloudflare token
+CLOUDFLARE_ACCOUNT_ID     → Your Cloudflare Account ID
+D1_DATABASE_ID            → From 'wrangler d1 create' output
+B2_KEY_ID                 → From Backblaze B2
+B2_APPLICATION_KEY        → From Backblaze B2 (keep secret!)
+ADMIN_TOKEN               → openssl rand -hex 32
 ```
 
-### Option B: Commit a sanitized wrangler.toml (Not Recommended)
+### Variables (Non-sensitive)
 
-Keep `wrangler.toml` with placeholders in the repo and deploy with:
-```yaml
-command: deploy --config wrangler.toml
+Repository Settings → Secrets and variables → Actions → New repository variable
+
+```
+CORS_ORIGINS = "https://yourdomain.com"
+B2_ENDPOINT = "s3.us-west-004.backblazeb2.com"
+B2_BUCKET_NAME = "anamnesis-prod-docs"
+ENVIRONMENT = "production"
 ```
 
-But this means your database ID and bucket name are public.
+## Step 5: Update wrangler.toml
 
----
+```toml
+# backend/wrangler.toml
 
-## Step 5: Test the Workflow
+[[d1_databases]]
+binding = "DB"
+database_name = "anamnesis_db"
+database_id = "<from-step-2>"
 
-1. Make a small change (e.g., add a comment to README.md)
-2. Commit and push to `master` branch:
-   ```bash
-   git add .
-   git commit -m "test: trigger GitHub Actions"
-   git push origin master
-   ```
-3. Go to GitHub → **Actions** tab
-4. Watch the workflow run
+[vars]
+CORS_ORIGINS = "https://yourdomain.com"
+B2_ENDPOINT = "s3.us-west-004.backblazeb2.com"
+B2_BUCKET_NAME = "anamnesis-prod-docs"
+```
 
-If successful, you'll see:
-- ✅ `deploy-backend` job completed
-- ✅ `deploy-frontend` job completed
+## Step 6: Verify Workflow
 
----
+1. Commit and push to `master` branch
+2. Go to GitHub → Actions
+3. Watch "Deploy to Cloudflare" workflow run
+4. Check logs for errors
 
-## Step 6: Check Deployment
+## Workflow Behavior
 
-1. **Backend:** Visit your Workers URL:
-   ```
-   https://anamnesis-backend.your-subdomain.workers.dev/api/health
-   ```
+The workflow (`.github/workflows/cloudflare.yml`) will:
 
-2. **Frontend:** Visit your Pages URL:
-   ```
-   https://anamnesis.pages.dev
-   ```
-   (or your custom domain if configured)
+1. **Checkout** code
+2. **Install dependencies** for backend and frontend
+3. **Create wrangler.toml** from secrets (on each deploy)
+4. **Deploy backend** to Cloudflare Workers
+5. **Build frontend** with Vite
+6. **Deploy frontend** to Cloudflare Pages
 
----
+### Manual Deployment
+
+You can also trigger manually:
+
+1. GitHub → Actions → "Deploy to Cloudflare"
+2. Click "Run workflow"
+3. Optionally uncheck "Deploy backend" or "Deploy frontend" to deploy only one
 
 ## Troubleshooting
 
-### Error: "wrangler.toml.local not found"
+### Workflow fails: "authentication failed"
 
-- Make sure you added all secrets to GitHub (Step 4)
-- Or commit a sanitized `wrangler.toml` without secrets
+- Verify `CLOUDFLARE_API_TOKEN` in GitHub Secrets
+- Regenerate token if expired (Cloudflare API tokens expire after 1 year)
 
-### Error: "Unauthorized" or "Invalid API Token"
+### "database_id not found"
 
-- Check that `CLOUDFLARE_API_TOKEN` has correct permissions
-- Regenerate token if needed
+- The `database_id` in `wrangler.toml` must match the one you created
+- Check `.github/workflows/cloudflare.yml` — it reads from `secrets.D1_DATABASE_ID`
 
-### Error: "B2_APPLICATION_KEY not found"
+### B2 upload fails
 
-- Run Step 3 manually: `wrangler secret put B2_APPLICATION_KEY`
+- Check `B2_KEY_ID` and `B2_APPLICATION_KEY` in GitHub Secrets
+- Verify the B2 bucket exists and you have write permission
+- Make sure `B2_ENDPOINT` and `B2_BUCKET_NAME` are correct
 
-### Frontend doesn't load data
+### "CORS blocked in production"
 
-- Check that `VITE_API_URL` in GitHub secrets matches your Workers URL
-- Check CORS settings in `backend/src/index.js`
+- Update `CORS_ORIGINS` in GitHub Variables to match your domain
+- It should be `https://yourdomain.com`, not `http://` in production
 
----
+## Security Best Practices
 
-## Best Practices
+✅ **DO**:
+- Use GitHub Secrets for all sensitive data
+- Rotate API tokens annually
+- Use separate Backblaze accounts for dev and prod
+- Enable branch protection rules requiring status checks
+- Review workflow logs for exposed secrets (they should be redacted)
 
-1. **Never commit** `wrangler.toml.local` or any file with real secrets
-2. **Use GitHub Environments** for staging/production separation (optional)
-3. **Enable branch protection** on `master` to require PR reviews
-4. **Monitor Actions usage** - GitHub Actions has limits (2,000 minutes/month free)
-
----
-
-## What Happens on Each Push
-
-1. GitHub Actions triggers on push to `master`
-2. Backend job:
-   - Installs dependencies
-   - Creates `wrangler.toml.local` from secrets
-   - Deploys to Cloudflare Workers
-3. Frontend job (after backend succeeds):
-   - Installs dependencies
-   - Builds with `VITE_API_URL` from secrets
-   - Deploys to Cloudflare Pages
-4. Your app is live! 🎉
-
----
-
-## Disabling Manual Deploys
-
-Once GitHub Actions works, you can stop using `wrangler deploy` manually:
-
-- All deploys happen via `git push`
-- Teammates can deploy by merging to `master`
-- Rollback = `git revert` + push
-
----
+⚠️ **DO NOT**:
+- Commit `.env` files or secrets
+- Use the same `ADMIN_TOKEN` across environments
+- Share API tokens via email or chat
+- Deploy to production with `CORS_ORIGINS = "*"`
 
 ## Next Steps
 
-- [ ] Set up staging environment (deploy from `develop` branch)
-- [ ] Add linting/testing to workflow (before deploy)
-- [ ] Set up Slack/Discord notifications for deploy status
-- [ ] Configure custom domain for Cloudflare Pages
+- See `backend/CONFIG.md` for local setup
+- See `docs/LOCAL_DEVELOPMENT.md` for full-stack dev
+- Read `.github/workflows/cloudflare.yml` to understand the deployment pipeline
