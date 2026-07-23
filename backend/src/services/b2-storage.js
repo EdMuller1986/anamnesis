@@ -5,29 +5,42 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
  * Инициализация S3 клиента для Cloudflare Workers.
  */
 const getS3Client = (env) => {
-  // Очищаем эндпоинт от протокола, если он там есть
-  const cleanEndpoint = (env.B2_ENDPOINT || '').replace(/^https?:\/\//, '');
+  const endpoint = (env.B2_ENDPOINT || '').trim();
+  const cleanEndpoint = endpoint.replace(/^https?:\/\//, '');
 
-  // Для Backblaze B2 регион обычно берется из эндпоинта, например 'us-east-005'
-  const region = cleanEndpoint.split('.')[1] || 'us-east-005';
+  // Улучшенное извлечение региона: 
+  // Эндпоинты бывают s3.us-west-004.backblazeb2.com или us-west-004.backblazeb2.com
+  const parts = cleanEndpoint.split('.');
+  let region = 'us-east-005'; // fallback
 
-  if (!env.B2_KEY_ID || !env.B2_APPLICATION_KEY) {
-    console.error('B2 Credentials missing in environment');
+  if (parts.length >= 3) {
+    // Если начинается с s3, берем вторую часть, иначе первую
+    region = parts[0] === 's3' ? parts[1] : parts[0];
+  }
+
+  const keyId = (env.B2_KEY_ID || '').trim();
+  const appKey = (env.B2_APPLICATION_KEY || '').trim();
+
+  if (!keyId || !appKey) {
+    console.error('B2 Credentials missing');
   } else {
-    console.log(`B2 Config: endpoint=${cleanEndpoint}, region=${region}, keyIdLength=${env.B2_KEY_ID.length}`);
+    // Детекция Master Key (они обычно 12 символов и не работают с S3 API)
+    if (keyId.length <= 12) {
+      console.warn(`⚠️ B2_KEY_ID looks like a Master Key (length ${keyId.length}). Master keys are NOT compatible with S3 API. Please create a normal Application Key.`);
+    }
+    console.log(`B2 S3 Config: endpoint=${cleanEndpoint}, region=${region}, keyIdLen=${keyId.length}`);
   }
 
   return new S3Client({
     region: region,
     endpoint: `https://${cleanEndpoint}`,
     credentials: {
-      accessKeyId: env.B2_KEY_ID,
-      secretAccessKey: env.B2_APPLICATION_KEY,
+      accessKeyId: keyId,
+      secretAccessKey: appKey,
     },
     forcePathStyle: true, 
   });
 };
-
 /**
  * Загрузка файла через подписанную ссылку.
  * Это позволяет избежать использования внутреннего XML-парсера SDK,
