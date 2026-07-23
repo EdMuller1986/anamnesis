@@ -30,7 +30,14 @@ const app = new Hono();
 // ── Middleware ─────────────────────────────────────────────
 
 app.use('*', cors({
-  origin: (origin, c) => c.env.CORS_ORIGINS === '*' ? origin : (c.env.CORS_ORIGINS || '').split(','),
+  origin: (origin, c) => {
+    const allowed = c.env.CORS_ORIGINS;
+    if (!allowed) {
+      console.warn('CORS_ORIGINS not set, rejecting request from:', origin);
+      return null;
+    }
+    return allowed === '*' ? origin : allowed.split(',');
+  },
   credentials: true,
 }));
 
