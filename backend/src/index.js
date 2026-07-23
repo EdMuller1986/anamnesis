@@ -18,12 +18,17 @@ import comments from './routes/comments';
 import growth from './routes/growth';
 import vaccinations from './routes/vaccinations';
 import adminTools from './routes/admin-tools';
+import admin from './routes/admin';
 import errors from './routes/errors';
 import reminders from './routes/reminders';
 import aiRequests from './routes/ai-requests';
 import history from './routes/history';
 import patientContext from './routes/patient-context';
 import search from './routes/search';
+import prescriptions from './routes/prescriptions';
+import visitDiagnoses from './routes/visit-diagnoses';
+import exportRoute from './routes/export';
+import webauthn from './routes/webauthn';
 
 const app = new Hono();
 
@@ -128,34 +133,10 @@ app.use('/api/admin/*', async (c, next) => {
 
 app.get('/api/health', (c) => c.json({ status: 'ok', db: 'connected' }));
 app.get('/api/version', (c) => c.json({ version: '2.0.0-serverless' }));
-app.get('/api/webauthn/available', (c) => c.json({ available: false }));
-app.get('/api/auth/security-status', (c) => c.json({ webauthn_enabled: false, lockout_active: false }));
+app.route('/api/webauthn', webauthn);
 
-/**
- * Экспорт медицинского отчета.
- * Имеет собственную логику авторизации по токену в URL.
- */
-app.get('/api/export/pdf', async (c) => {
-  const token = c.req.query('token');
-  const pid = parseInt(c.req.query('patient_id') || '1', 10);
-  
-  if (!token) return c.text('Unauthorized', 401);
-  const session = await authSession.getSession(c.env.DB, token);
-  if (!session || session.patient_id !== pid) return c.text('Unauthorized', 401);
+// ── Эндпоинты ──────────────────────────────────────────────
 
-  // Сбор данных и генерация HTML...
-  const [p, ds, ms, ts] = await Promise.all([
-    c.env.DB.prepare('SELECT * FROM patient WHERE id = ?').bind(pid).first(),
-    c.env.DB.prepare('SELECT * FROM diagnoses WHERE patient_id = ? ORDER BY status ASC, created_at DESC').bind(pid).all(),
-    c.env.DB.prepare('SELECT * FROM medications WHERE patient_id = ? ORDER BY status ASC, created_at DESC').bind(pid).all(),
-    c.env.DB.prepare('SELECT * FROM timeline WHERE patient_id = ? ORDER BY event_date DESC').bind(pid).all()
-  ]);
-
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Отчёт: ${p.full_name}</title></head><body><h1>Медицинский отчёт</h1><p>Пациент: ${p.full_name}</p></body></html>`;
-  return c.html(html);
-});
-
-// Монтирование роутов
 app.route('/api/patient', patient);
 app.route('/api/timeline', timeline);
 app.route('/api/documents', documents);
@@ -169,12 +150,16 @@ app.route('/api/comments', comments);
 app.route('/api/growth', growth);
 app.route('/api/vaccinations', vaccinations);
 app.route('/api/admin/tools', adminTools);
+app.route('/api/admin', admin);
 app.route('/api/errors', errors);
 app.route('/api/reminders', reminders);
 app.route('/api/ai-requests', aiRequests);
 app.route('/api/history', history);
 app.route('/api/patient-context', patientContext);
 app.route('/api/search', search);
+app.route('/api/prescriptions', prescriptions);
+app.route('/api/visit-diagnoses', visitDiagnoses);
+app.route('/api/export', exportRoute);
 
 // Вход по ПИН-коду
 app.post('/api/auth/login', async (c) => {

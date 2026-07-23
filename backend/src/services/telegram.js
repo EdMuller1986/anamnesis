@@ -1,36 +1,27 @@
-// Native Telegram client — без зависимости на node-telegram-bot-api.
-//
-// Почему native: пакет node-telegram-bot-api тянет старый request/form-data/tough-cookie
-// с 2 critical + 3 moderate CVE которые не фиксятся без breaking change.
-// Нам нужен только sendMessage/sendDocument — это один POST, проще сделать
-// через встроенный fetch (Node 18+). Безопаснее, меньше deps.
-
-const config = require('../config');
+// Native Telegram client for Cloudflare Workers (using fetch)
 
 const TG_BASE = 'https://api.telegram.org';
 
 /**
  * Отправить текстовое сообщение в Telegram-чат владельца.
- * Если TOKEN/CHAT_ID не заданы — молча логируем и выходим.
  */
-async function sendMessage(text, options = {}) {
-  if (!config.TELEGRAM_BOT_TOKEN) {
+export async function sendMessage(env, text, options = {}) {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  const chatId = env.TELEGRAM_CHAT_ID;
+
+  if (!token || !chatId) {
     console.log('[Telegram] Бот не настроен. Сообщение:', text);
-    return { ok: false, reason: 'no_token' };
-  }
-  if (!config.TELEGRAM_CHAT_ID) {
-    console.log('[Telegram] TELEGRAM_CHAT_ID не задан. Сообщение:', text);
-    return { ok: false, reason: 'no_chat_id' };
+    return { ok: false, reason: 'not_configured' };
   }
 
   try {
     const resp = await fetch(
-      `${TG_BASE}/bot${config.TELEGRAM_BOT_TOKEN}/sendMessage`,
+      `${TG_BASE}/bot${token}/sendMessage`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          chat_id: config.TELEGRAM_CHAT_ID,
+          chat_id: chatId,
           text,
           parse_mode: options.parse_mode || 'HTML',
           disable_web_page_preview: options.disable_preview !== false,
@@ -51,25 +42,23 @@ async function sendMessage(text, options = {}) {
 }
 
 /**
- * Отправить файл как документ. Используется системой бэкапов для offsite копий.
+ * Отправить файл как документ (Buffer/ArrayBuffer).
  */
-async function sendDocument(filePath, caption = '', options = {}) {
-  if (!config.TELEGRAM_BOT_TOKEN || !config.TELEGRAM_CHAT_ID) {
-    return { ok: false, reason: 'not_configured' };
-  }
-  try {
-    const fs = require('fs');
-    const path = require('path');
-    const buf = fs.readFileSync(filePath);
+export async function sendDocument(env, fileBuffer, fileName, caption = '', options = {}) {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  const chatId = env.TELEGRAM_CHAT_ID;
 
+  if (!token || !chatId) return { ok: false, reason: 'not_configured' };
+
+  try {
     const form = new FormData();
-    form.append('chat_id', config.TELEGRAM_CHAT_ID);
+    form.append('chat_id', chatId);
     form.append('caption', caption.slice(0, 1024));
     form.append('parse_mode', options.parse_mode || 'HTML');
-    form.append('document', new Blob([buf]), options.filename || path.basename(filePath));
+    form.append('document', new Blob([fileBuffer]), fileName);
 
     const resp = await fetch(
-      `${TG_BASE}/bot${config.TELEGRAM_BOT_TOKEN}/sendDocument`,
+      `${TG_BASE}/bot${token}/sendDocument`,
       { method: 'POST', body: form }
     );
     if (!resp.ok) {
@@ -84,5 +73,3 @@ async function sendDocument(filePath, caption = '', options = {}) {
     return { ok: false, reason: 'network_error', error: err.message };
   }
 }
-
-module.exports = { sendMessage, sendDocument };
