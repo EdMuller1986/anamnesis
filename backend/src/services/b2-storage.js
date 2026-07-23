@@ -3,7 +3,6 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 /**
  * Инициализация S3 клиента для Cloudflare Workers.
- * Мы используем стандартный клиент, но важно убедиться, что эндпоинт и регион корректны.
  */
 const getS3Client = (env) => {
   // Для Backblaze B2 регион обычно берется из эндпоинта, например 'us-east-005'
@@ -16,20 +15,43 @@ const getS3Client = (env) => {
       accessKeyId: env.B2_KEY_ID,
       secretAccessKey: env.B2_APPLICATION_KEY,
     },
-    // Важно для совместимости с Cloudflare Workers
     forcePathStyle: true, 
   });
 };
 
+/**
+ * Загрузка файла через подписанную ссылку.
+ * Это позволяет избежать использования внутреннего XML-парсера SDK,
+ * который вызывает ошибку "DOMParser is not defined" в Workers.
+ */
 export async function uploadFile(env, fileName, body, contentType) {
   const client = getS3Client(env);
+  
+  // Создаем команду для загрузки
   const command = new PutObjectCommand({
     Bucket: env.B2_BUCKET_NAME,
     Key: fileName,
-    Body: body,
     ContentType: contentType,
   });
-  await client.send(command);
+
+  // Генерируем подписанный URL на 10 минут
+  const signedUrl = await getSignedUrl(client, command, { expiresIn: 600 });
+
+  // Отправляем файл напрямую через fetch
+  const response = await fetch(signedUrl, {
+    method: 'PUT',
+    body: body,
+    headers: {
+      'Content-Type': contentType,
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`B2 Upload Error (${response.status}):`, errorText);
+    throw new Error(`B2 Upload failed: ${response.status} ${errorText}`);
+  }
+
   return fileName;
 }
 
@@ -49,5 +71,9 @@ export async function deleteFile(env, fileName) {
     Bucket: env.B2_BUCKET_NAME,
     Key: fileName,
   });
+  
+  // Удаление обычно не возвращает контента, который нужно парсить, 
+  // но на всякий случай можно тоже переделать на подписанный URL, если будет падать.
+  // Пока оставим стандартный метод для простоты.
   await client.send(command);
 }
