@@ -27,14 +27,50 @@ jobs:
         with:
           node-version: 22
 
-      - name: Functional Check - Cloudflare & D1
+      - name: Check Presence of All Required Secrets
         run: |
-          echo "Checking Cloudflare API connectivity..."
-          # Проверяем токен через list-databases (самый простой способ проверить доступ к D1)
-          if ! npx wrangler@3 d1 list --remote 2>&1 | grep -q "${{ secrets.D1_DATABASE_ID }}"; then
-            echo "::error::Cloudflare Auth Failed or D1_DATABASE_ID not found. Check CLOUDFLARE_API_TOKEN and D1_DATABASE_ID."
+          MISSING=0
+          check_presence() {
+            if [ -z "${1}" ]; then
+              echo "❌ Error: Secret ${2} is missing!"
+              MISSING=1
+            fi
+          }
+          check_presence "${{ secrets.CLOUDFLARE_API_TOKEN }}" "CLOUDFLARE_API_TOKEN"
+          check_presence "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" "CLOUDFLARE_ACCOUNT_ID"
+          check_presence "${{ secrets.D1_DATABASE_ID }}" "D1_DATABASE_ID"
+          check_presence "${{ secrets.B2_ENDPOINT }}" "B2_ENDPOINT"
+          check_presence "${{ secrets.B2_BUCKET_NAME }}" "B2_BUCKET_NAME"
+          check_presence "${{ secrets.B2_KEY_ID }}" "B2_KEY_ID"
+          check_presence "${{ secrets.B2_APPLICATION_KEY }}" "B2_APPLICATION_KEY"
+          check_presence "${{ secrets.VITE_API_URL }}" "VITE_API_URL"
+          check_presence "${{ secrets.CORS_ORIGINS }}" "CORS_ORIGINS"
+
+          if [ $MISSING -eq 1 ]; then
             exit 1
           fi
+
+      - name: Functional Check - Cloudflare & D1
+        run: |
+          echo "Testing Cloudflare API and D1 database access..."
+          
+          # Получаем список БД в формате JSON для надежного поиска
+          DB_LIST=$(npx wrangler@3 d1 list --remote --json 2>&1)
+          EXIT_CODE=$?
+          
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::Wrangler command failed with exit code $EXIT_CODE."
+            echo "Possible causes: Invalid CLOUDFLARE_API_TOKEN or incorrect CLOUDFLARE_ACCOUNT_ID."
+            echo "Details: $DB_LIST"
+            exit 1
+          fi
+
+          if ! echo "$DB_LIST" | grep -q "${{ secrets.D1_DATABASE_ID }}"; then
+            echo "::error::D1_DATABASE_ID not found in the account's database list."
+            echo "Please verify that the Database ID exists in your Cloudflare dashboard."
+            exit 1
+          fi
+          
           echo "✅ Cloudflare & D1 Connectivity OK"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
