@@ -58,7 +58,8 @@ documents.post('/', async (c) => {
 
     return c.json(results[0], 201);
   } catch (e) {
-    return c.json({ error: 'Upload failed', message: e.message }, 500);
+    console.error('S3 Upload Error:', e);
+    return c.json({ error: 'Upload failed', message: e.message, code: e.code }, 500);
   }
 });
 
