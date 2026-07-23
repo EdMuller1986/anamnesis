@@ -1,14 +1,23 @@
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
+/**
+ * Инициализация S3 клиента для Cloudflare Workers.
+ * Мы используем стандартный клиент, но важно убедиться, что эндпоинт и регион корректны.
+ */
 const getS3Client = (env) => {
+  // Для Backblaze B2 регион обычно берется из эндпоинта, например 'us-east-005'
+  const region = env.B2_ENDPOINT.split('.')[1] || 'us-east-005';
+  
   return new S3Client({
-    region: env.B2_ENDPOINT.split('.')[1], // Извлекаем регион из эндпоинта
+    region: region,
     endpoint: `https://${env.B2_ENDPOINT}`,
     credentials: {
       accessKeyId: env.B2_KEY_ID,
       secretAccessKey: env.B2_APPLICATION_KEY,
     },
+    // Важно для совместимости с Cloudflare Workers
+    forcePathStyle: true, 
   });
 };
 
