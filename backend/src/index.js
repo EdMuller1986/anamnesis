@@ -48,7 +48,7 @@ app.onError((err, c) => {
 const getMeta = (c) => {
   const patientIdRaw = c.req.header('x-patient-id') || '1';
   let patientId = parseInt(patientIdRaw, 10);
-  if (isNaN(patientId)) patientId = 1;
+  if (isNaN(patientId) || patientId <= 0) patientId = 1;
 
   return {
     ip: c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || '0.0.0.0',
@@ -65,23 +65,23 @@ const getMeta = (c) => {
 const authMiddleware = async (c, next) => {
   const path = c.req.path;
   
-  // 1. Исключения, не требующие вообще никакой проверки
-  const publicPaths = [
+  // 1. Публичные эндпоинты
+  const publicPaths = new Set([
     '/api/auth/login',
     '/api/health',
     '/api/version',
-    '/api/webauthn/available'
-  ];
-  if (publicPaths.includes(path)) return await next();
-  if (path.startsWith('/api/webauthn/login')) return await next();
+    '/api/webauthn/available',
+    '/api/export/pdf'
+  ]);
 
-  // 2. Исключение для админки — там своя проверка X-Admin-Token
-  if (path.startsWith('/api/admin/')) return await next();
+  if (publicPaths.has(path)) return await next();
 
-  // 3. Исключение для экспорта — там проверка токена в параметрах URL
-  if (path === '/api/export/pdf') return await next();
+  // 2. Исключения по префиксу
+  if (path.startsWith('/api/webauthn/login/') || path.startsWith('/api/admin/')) {
+    return await next();
+  }
 
-  // 4. Проверка сессии
+  // 3. Проверка сессии
   const token = c.req.header('X-Session-Token') || 
                 c.req.header('Authorization')?.replace('Bearer ', '') || 
                 c.req.query('token') ||
