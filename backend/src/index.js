@@ -105,7 +105,16 @@ const authMiddleware = async (c, next) => {
   if (!session) return c.json({ error: 'Unauthorized: Invalid session' }, 401);
 
   const meta = getMeta(c);
-  c.executionCtx.waitUntil(authSession.touchSession(c.env.DB, token, meta.ip));
+  try {
+    // В Cloudflare Workers есть executionCtx. В тестах или других окружениях его может не быть.
+    if (c.executionCtx) {
+      c.executionCtx.waitUntil(authSession.touchSession(c.env.DB, token, meta.ip));
+    } else {
+      await authSession.touchSession(c.env.DB, token, meta.ip);
+    }
+  } catch (e) {
+    await authSession.touchSession(c.env.DB, token, meta.ip);
+  }
 
   c.set('patientId', session.patient_id);
   c.set('session', session);

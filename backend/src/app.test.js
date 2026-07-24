@@ -15,7 +15,11 @@ const mockDB = {
 const mockEnv = {
   DB: mockDB,
   CORS_ORIGINS: '*',
-  ADMIN_TOKEN: 'test-admin-token'
+  ADMIN_TOKEN: 'test-admin-token',
+  B2_ENDPOINT: 's3.us-west-004.backblazeb2.com',
+  B2_BUCKET_NAME: 'test-bucket',
+  B2_KEY_ID: 'test-key-id',
+  B2_APPLICATION_KEY: 'test-app-key'
 };
 
 describe('Anamnesis API Integration Tests', () => {
@@ -74,5 +78,26 @@ describe('Anamnesis API Integration Tests', () => {
     // It might be 404 or 500 if the underlying route fails due to more missing mocks,
     // but 403 means middleware BLOCKED it, so NOT 403 means middleware ALLOWED it.
     expect(res.status).not.toBe(403);
+  });
+
+  it('GET /api/documents/:id/file returns 302 redirect', async () => {
+    const res = await app.request('/api/documents/1/file', {
+      headers: { 'X-Session-Token': 'valid-token' }
+    }, {
+      ...mockEnv,
+      DB: {
+        prepare: (q) => ({
+          bind: (...args) => ({
+            first: () => {
+              if (q.includes('sessions')) return Promise.resolve({ patient_id: 1 });
+              return Promise.resolve({ id: 1, file_path: 'test.pdf', title: 'Test', mime_type: 'application/pdf' });
+            },
+            run: () => Promise.resolve({ success: true })
+          })
+        })
+      }
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toContain('s3.us-west-004.backblazeb2.com');
   });
 });
