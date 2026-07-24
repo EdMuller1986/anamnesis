@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "test": "vitest run",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types"
   },
@@ -16,6 +17,7 @@
     "hono": "^4.2.7"
   },
   "devDependencies": {
+    "vitest": "^4.1.10",
     "wrangler": "^4.112.0"
   }
 }
