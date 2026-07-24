@@ -21,7 +21,7 @@ documents.get('/:id/file', async (c) => {
   if (!doc) return c.json({ error: 'Not found' }, 404);
 
   try {
-    const url = await b2.getDownloadUrl(c.env, doc.file_path);
+    const url = await b2.getDownloadUrl(c.env, doc.file_path, doc.title, doc.mime_type);
     return c.redirect(url);
   } catch (e) {
     return c.json({ error: 'Storage error', message: e.message }, 500);
@@ -43,7 +43,9 @@ documents.post('/', async (c) => {
   const notes = body.notes || '';
   const timelineId = body.timeline_id || null;
   
-  const fileName = `${crypto.randomUUID()}-${file.name}`;
+  // Clean filename for storage (only UUID + extension)
+  const extension = file.name.split('.').pop() || 'bin';
+  const fileName = `${crypto.randomUUID()}.${extension}`;
   
   try {
     // Save to B2

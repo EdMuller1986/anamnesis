@@ -25,7 +25,7 @@ describe('B2 Storage Service Integration', () => {
       console.log('Uploaded:', fileName);
 
       // 2. Get Download URL
-      const url = await getDownloadUrl(env, fileName);
+      const url = await getDownloadUrl(env, fileName, 'test.txt', contentType);
       expect(url).toContain(env.B2_ENDPOINT);
       expect(url).toContain(fileName);
       console.log('Download URL:', url);

@@ -77,12 +77,18 @@ export async function uploadFile(env, fileName, body, contentType) {
   return fileName;
 }
 
-export async function getDownloadUrl(env, fileName) {
+export async function getDownloadUrl(env, fileName, friendlyName, mimeType) {
   const client = getS3Client(env);
+  
   const command = new GetObjectCommand({
     Bucket: env.B2_BUCKET_NAME,
     Key: fileName,
+    ResponseContentType: mimeType || 'application/octet-stream',
+    ResponseContentDisposition: friendlyName 
+      ? `inline; filename="${encodeURIComponent(friendlyName)}"`
+      : 'inline'
   });
+  
   // Ссылка будет работать 1 час
   return await getSignedUrl(client, command, { expiresIn: 3600 });
 }
