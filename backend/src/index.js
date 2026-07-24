@@ -82,8 +82,7 @@ const authMiddleware = async (c, next) => {
     '/api/auth/login',
     '/api/health',
     '/api/version',
-    '/api/webauthn/available',
-    '/api/export/pdf'
+    '/api/webauthn/available'
   ]);
 
   if (publicPaths.has(path)) return await next();

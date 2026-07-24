@@ -91,71 +91,143 @@ exportRoute.get('/pdf', async (c) => {
     <meta charset="UTF-8">
     <title>Медицинский отчёт: ${esc(patient.full_name)}</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.4; color: #333; max-width: 900px; margin: 0 auto; padding: 40px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.4; color: #333; max-width: 1000px; margin: 0 auto; padding: 20px; }
         h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 5px; }
-        h2 { color: #2980b9; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-top: 30px; }
-        .patient-info { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; flex-wrap: wrap; }
+        h2 { color: #2980b9; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-top: 30px; page-break-after: avoid; }
+        .patient-info { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; flex-wrap: wrap; border: 1px solid #eee; }
         .patient-info div { margin-right: 30px; margin-bottom: 10px; }
-        .label { font-weight: bold; color: #7f8c8d; font-size: 0.9em; text-transform: uppercase; display: block; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th { text-align: left; background: #f2f2f2; padding: 10px; border-bottom: 2px solid #ddd; }
-        td { padding: 10px; border-bottom: 1px solid #eee; vertical-align: top; }
-        .status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; font-weight: bold; }
-        .status-active { background: #e8f5e9; color: #2e7d32; }
-        .status-urgent { background: #ffebee; color: #c62828; }
-        .footer { margin-top: 50px; text-align: center; color: #95a5a6; font-size: 0.8em; border-top: 1px solid #eee; padding-top: 20px; }
+        .label { font-weight: bold; color: #7f8c8d; font-size: 0.8em; text-transform: uppercase; display: block; margin-bottom: 2px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: auto; }
+        th { text-align: left; background: #f2f2f2; padding: 8px 10px; border-bottom: 2px solid #ddd; font-size: 0.9em; }
+        td { padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; font-size: 0.9em; }
+        .status-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; font-weight: bold; white-space: nowrap; }
+        .status-active { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+        .status-urgent { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+        .footer { margin-top: 40px; text-align: center; color: #95a5a6; font-size: 0.75em; border-top: 1px solid #eee; padding-top: 20px; }
+        
+        @media print {
+            body { padding: 0; max-width: 100%; }
+            .patient-info { background: white !important; }
+            th { background: #eee !important; -webkit-print-color-adjust: exact; }
+            .status-badge { border: 1px solid #ccc !important; -webkit-print-color-adjust: exact; }
+            .no-print { display: none; }
+            h2 { margin-top: 20px; }
+            tr { page-break-inside: avoid; }
+        }
     </style>
 </head>
 <body>
-    <h1>Медицинский отчёт</h1>
+    <div style="display: flex; justify-content: space-between; align-items: baseline;">
+        <h1>Медицинский отчёт</h1>
+        <button onclick="window.print()" class="no-print" style="padding: 8px 16px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer;">Напечатать PDF</button>
+    </div>
+
     <div class="patient-info">
         <div><span class="label">Пациент</span><strong>${esc(patient.full_name)}</strong></div>
         <div><span class="label">Дата рождения</span>${formatDate(patient.date_of_birth)} (${age})</div>
         <div><span class="label">Пол</span>${esc(patient.gender)}</div>
         <div><span class="label">Город</span>${esc(patient.city)}</div>
-        <div><span class="label">Вес/Рост</span>${patient.current_weight_kg || '—'} кг / ${patient.current_height_cm || '—'} см</div>
+        <div><span class="label">Вес / Рост</span>${patient.current_weight_kg || '—'} кг / ${patient.current_height_cm || '—'} см</div>
         <div><span class="label">Аллергии</span>${esc(patient.allergies) || 'Не указаны'}</div>
     </div>
     
-    <p style="text-align: right; color: #7f8c8d;">Дата формирования: ${reportDate}</p>
+    <p style="text-align: right; color: #7f8c8d; font-size: 0.8em; margin-bottom: 0;">Дата формирования: ${reportDate}</p>
 
     <h2>Активные диагнозы</h2>
     <table>
-        <tr><th>Диагноз</th><th>МКБ</th><th>Статус</th><th>Описание</th></tr>
+        <thead><tr><th>Диагноз</th><th>МКБ</th><th>Статус</th><th>Описание</th></tr></thead>
+        <tbody>
         ${diagnoses.results.filter(d => d.status === 'active').map(d => `
             <tr>
-                <td><strong>${esc(d.name)}</strong></td>
-                <td><code>${esc(d.icd_code)}</code></td>
-                <td><span class="status-badge status-active">${tr(diagnosisStatus, d.status)}</span></td>
+                <td style="width: 25%"><strong>${esc(d.name)}</strong></td>
+                <td style="width: 10%"><code>${esc(d.icd_code)}</code></td>
+                <td style="width: 15%"><span class="status-badge status-active">${tr(diagnosisStatus, d.status)}</span></td>
                 <td>${esc(d.detail)}</td>
             </tr>
         `).join('')}
+        </tbody>
     </table>
 
     <h2>Текущие назначения</h2>
     <table>
-        <tr><th>Препарат</th><th>Дозировка</th><th>Схема</th><th>Статус</th></tr>
+        <thead><tr><th>Препарат</th><th>Дозировка</th><th>Схема</th><th>Статус</th></tr></thead>
+        <tbody>
         ${medications.results.filter(m => m.status === 'active').map(m => `
             <tr>
-                <td><strong>${esc(m.name)}</strong></td>
-                <td>${esc(m.dosage)}</td>
+                <td style="width: 25%"><strong>${esc(m.name)}</strong></td>
+                <td style="width: 20%">${esc(m.dosage)}</td>
                 <td>${esc(m.frequency)}</td>
-                <td><span class="status-badge status-active">${tr(medStatus, m.status)}</span></td>
+                <td style="width: 15%"><span class="status-badge status-active">${tr(medStatus, m.status)}</span></td>
             </tr>
         `).join('')}
+        </tbody>
     </table>
+
+    ${plan.results.length > 0 ? `
+    <h2>План лечения и задачи</h2>
+    <table>
+        <thead><tr><th>Срок</th><th>Приоритет</th><th>Задача</th><th>Статус</th></tr></thead>
+        <tbody>
+        ${plan.results.filter(p => p.status !== 'done' && p.status !== 'cancelled').map(p => `
+            <tr>
+                <td style="width: 15%">${formatDate(p.due_date)}</td>
+                <td style="width: 15%"><span class="status-badge ${p.priority === 'urgent' ? 'status-urgent' : ''}">${tr(planPriority, p.priority)}</span></td>
+                <td><strong>${esc(p.title)}</strong>${p.description ? `<br><small>${esc(p.description)}</small>` : ''}</td>
+                <td style="width: 15%">${tr(planStatus, p.status)}</td>
+            </tr>
+        `).join('')}
+        </tbody>
+    </table>
+    ` : ''}
+
+    ${labResults.results.length > 0 ? `
+    <h2>Последние результаты анализов</h2>
+    <table>
+        <thead><tr><th>Дата</th><th>Анализ</th><th>Результат</th><th>Норма</th><th>Статус</th></tr></thead>
+        <tbody>
+        ${labResults.results.slice(0, 10).map(l => `
+            <tr>
+                <td style="width: 12%">${formatDate(l.test_date)}</td>
+                <td style="width: 25%"><strong>${esc(l.test_name)}</strong></td>
+                <td style="width: 15%">${esc(l.value)} ${esc(l.unit)}</td>
+                <td style="width: 15%">${esc(l.reference_range)}</td>
+                <td><span class="status-badge ${l.interpretation === 'critical' ? 'status-urgent' : ''}">${tr(labStatus, l.interpretation)}</span></td>
+            </tr>
+        `).join('')}
+        </tbody>
+    </table>
+    ` : ''}
+
+    ${vaccinations.results.length > 0 ? `
+    <h2>Вакцинация</h2>
+    <table>
+        <thead><tr><th>Дата</th><th>Препарат</th><th>Заболевание</th><th>Статус</th></tr></thead>
+        <tbody>
+        ${vaccinations.results.filter(v => v.status === 'done').map(v => `
+            <tr>
+                <td style="width: 15%">${formatDate(v.scheduled_date)}</td>
+                <td style="width: 25%"><strong>${esc(v.vaccine_name)}</strong></td>
+                <td>${esc(v.target_disease)}</td>
+                <td style="width: 15%">${tr(vacStatus, v.status)}</td>
+            </tr>
+        `).join('')}
+        </tbody>
+    </table>
+    ` : ''}
 
     <h2>История событий (последние 20)</h2>
     <table>
-        <tr><th>Дата</th><th>Событие</th><th>Специалист</th><th>Описание</th></tr>
+        <thead><tr><th>Дата</th><th>Событие</th><th>Специалист</th><th>Описание</th></tr></thead>
+        <tbody>
         ${timeline.results.slice(0, 20).map(t => `
             <tr>
-                <td style="white-space: nowrap;">${formatDate(t.event_date)}</td>
-                <td><strong>${esc(t.title)}</strong><br><small>${tr(timelineCategory, t.category)}</small></td>
-                <td>${esc(t.specialist_name)}</td>
+                <td style="width: 12%; white-space: nowrap;">${formatDate(t.event_date)}</td>
+                <td style="width: 25%"><strong>${esc(t.title)}</strong><br><small>${tr(timelineCategory, t.category)}</small></td>
+                <td style="width: 20%">${esc(t.specialist_name)}</td>
                 <td>${esc(t.description)}</td>
             </tr>
         `).join('')}
+        </tbody>
     </table>
 
     <div class="footer">
