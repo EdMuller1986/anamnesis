@@ -51,6 +51,7 @@ export const EP = {
   // ── Documents ─────────────────────────────
   documents: '/documents',
   documentItem: (id: number) => `/documents/${id}`,
+  documentFile: (id: number) => `/documents/${id}/file`,
   /** PDF page previews (PNG, генерируются pdftoppm через pdf-preview.js) */
   documentPreviews: (id: number) => `/documents/${id}/previews`,
 

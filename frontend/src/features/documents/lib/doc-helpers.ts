@@ -1,16 +1,18 @@
+import { EP } from '@/shared/api/endpoints';
+import { getSession } from '@/shared/auth/session';
 import type { Document, Timeline } from '@/shared/types';
 
 /**
  * Конвертирует `doc.file_path` в публичный URL.
- * В БД путь хранится как `/var/lib/.../uploads/xxx.pdf` или с обратными слэшами — берём basename.
- * Порт из vanilla `documents.js:13` (getFileUrl).
+ * Теперь использует прокси-эндпоинт бэкенда, который редиректит на B2.
+ * Добавляет токен сессии в query param для авторизации при прямом открытии/скачивании.
  */
 export function docFileUrl(doc: Document): string | null {
-  if (!doc.file_path) return null;
-  const parts = doc.file_path.split(/[/\\]/);
-  const name = parts[parts.length - 1];
-  if (!name) return null;
-  return `/uploads/${name}`;
+  if (!doc.id) return null;
+  const baseUrl = import.meta.env.VITE_API_URL || '/api';
+  const token = getSession().sessionToken;
+  const url = `${baseUrl}${EP.documentFile(doc.id)}`;
+  return token ? `${url}?token=${encodeURIComponent(token)}` : url;
 }
 
 export function isImage(doc: Document): boolean {

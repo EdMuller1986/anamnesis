@@ -80,8 +80,8 @@ export function MorePage() {
       const session = getSession();
       const token = session.sessionToken ?? '';
       const pid = session.patientId ?? 1;
-      const backendUrl = 'https://anamnesis-backend.simulyakrge.workers.dev';
-      window.open(`${backendUrl}/api/export/pdf?token=${encodeURIComponent(token)}&patient_id=${pid}`, '_blank');
+      const baseUrl = import.meta.env.VITE_API_URL || '/api';
+      window.open(`${baseUrl}/api/export/pdf?token=${encodeURIComponent(token)}&patient_id=${pid}`, '_blank');
       return;
     }
     navigate(item.target);

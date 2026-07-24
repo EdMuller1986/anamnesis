@@ -67,7 +67,17 @@ export default defineConfig(({ mode }) => {
           navigateFallbackDenylist: [/^\/uploads\//, /^\/api\//],
           runtimeCaching: [
             {
-              urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
+              // Не кэшируем запросы на скачивание файлов и экспорт
+              urlPattern: ({ url }) => 
+                url.pathname.startsWith('/api/') && 
+                (url.pathname.endsWith('/file') || url.pathname.includes('/export/')),
+              handler: 'NetworkOnly',
+            },
+            {
+              urlPattern: ({ url }) => 
+                url.pathname.startsWith('/api/') && 
+                !url.pathname.endsWith('/file') && 
+                !url.pathname.includes('/export/'),
               handler: 'NetworkFirst',
               options: {
                 cacheName: 'api-cache-v2',
