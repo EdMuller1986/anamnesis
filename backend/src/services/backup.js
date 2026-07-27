@@ -65,19 +65,36 @@ export async function runBackup(env) {
  * Собирает все данные из D1.
  */
 async function getFullState(db, pid) {
-  const tables = [
-    'patient', 'diagnoses', 'medications', 'specialists', 
+  // Таблицы, где есть patient_id
+  const perPatientTables = [
+    'diagnoses', 'medications', 'specialists', 
     'medical_errors', 'plan', 'timeline', 'documents',
     'reminders', 'comments', 'vaccinations', 'growth_log', 
-    'lab_results', 'prescriptions', 'app_settings'
+    'lab_results', 'prescriptions', 'ai_requests'
   ];
 
+  // Глобальные или специфичные таблицы
+  const globalTables = ['app_settings', 'app_versions'];
+
   const results = {};
-  const queries = tables.map(t => db.prepare(`SELECT * FROM ${t} WHERE patient_id = ? OR patient_id IS NULL`).bind(pid).all());
-  const rows = await Promise.all(queries);
   
-  tables.forEach((t, i) => {
-    results[t] = rows[i].results;
+  // 1. Данные пациента
+  results['patient'] = (await db.prepare('SELECT * FROM patient WHERE id = ?').bind(pid).all()).results;
+
+  // 2. Таблицы с фильтром по patient_id
+  const perPatientQueries = perPatientTables.map(t => 
+    db.prepare(`SELECT * FROM ${t} WHERE patient_id = ?`).bind(pid).all()
+  );
+  const perPatientRows = await Promise.all(perPatientQueries);
+  perPatientTables.forEach((t, i) => {
+    results[t] = perPatientRows[i].results;
+  });
+
+  // 3. Глобальные таблицы
+  const globalQueries = globalTables.map(t => db.prepare(`SELECT * FROM ${t}`).all());
+  const globalRows = await Promise.all(globalQueries);
+  globalTables.forEach((t, i) => {
+    results[t] = globalRows[i].results;
   });
 
   return {
