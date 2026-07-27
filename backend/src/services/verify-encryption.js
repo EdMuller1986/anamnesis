@@ -1,4 +1,4 @@
-const crypto = require('node:crypto');
+import crypto from 'node:crypto';
 
 /**
  * Проверка логики шифрования, используемой в системе бэкапов.
