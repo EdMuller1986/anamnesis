@@ -25,7 +25,6 @@ export default defineConfig(({ mode }) => {
         registerType: 'autoUpdate',
         includeAssets: [
           'favicon.ico',
-          '_redirects',
           'icons/icon.svg',
           'icons/apple-touch-icon.png',
           'icons/icon-192.png',

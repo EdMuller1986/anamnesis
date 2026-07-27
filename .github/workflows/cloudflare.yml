@@ -169,7 +169,15 @@ jobs:
         run: cd frontend && npm ci
 
       - name: Build
-        run: cd frontend && npm run build
+        run: |
+          cd frontend
+          npm run build
+          # Ensure _redirects is in dist
+          if [ ! -f dist/_redirects ]; then
+            cp public/_redirects dist/_redirects
+          fi
+          echo "Build contents:"
+          ls -F dist/
         env:
           # Set API URL for production build
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
