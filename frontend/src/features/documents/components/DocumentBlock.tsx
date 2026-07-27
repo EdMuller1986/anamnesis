@@ -10,33 +10,11 @@ import {
   IconUser,
   IconBuildingHospital,
 } from '@tabler/icons-react';
-import { useQuery } from '@tanstack/react-query';
 import { Button, ExpandableText, ZoomableImage, CopyButton } from '@/shared/ui';
-import { api } from '@/shared/api/client';
-import { EP } from '@/shared/api/endpoints';
 import { docFileUrl, isImage, isPdf, DOC_CATEGORY_LABELS } from '../lib/doc-helpers';
 import { CommentsSection } from '@/features/comments/CommentsSection';
+import { PdfRenderer } from './PdfRenderer';
 import type { Document } from '@/shared/types';
-
-/**
- * Хук для PDF превью страниц. Backend генерирует PNG через pdftoppm
- * в /uploads/previews/{basename}-{page}.png и отдаёт список через
- * `GET /api/documents/:id/previews`.
- */
-interface PreviewsResponse {
-  previews: string[];
-}
-
-function usePdfPreviews(docId: number, enabled: boolean) {
-  return useQuery({
-    queryKey: ['document-previews', docId],
-    queryFn: () => api.get<PreviewsResponse>(EP.documentPreviews(docId)),
-    enabled,
-    retry: false,
-    // Previews статические — не нужно рефетчить постоянно
-    staleTime: 1000 * 60 * 60, // 1 час
-  });
-}
 
 /**
  * Блок одного документа внутри деталей визита.
@@ -46,9 +24,6 @@ export function DocumentBlock({ doc }: { doc: Document }) {
   const url = docFileUrl(doc);
   const img = isImage(doc);
   const pdf = isPdf(doc);
-  // Запрашиваем PNG-превью страниц только для PDF документов
-  const { data: previewsData } = usePdfPreviews(doc.id, pdf);
-  const pdfPreviews = previewsData?.previews ?? [];
 
   return (
     <div
@@ -95,46 +70,10 @@ export function DocumentBlock({ doc }: { doc: Document }) {
         </div>
       )}
 
-      {/* PDF — показываем PNG превью страниц (генерируются на бэке
-          через pdftoppm). iOS Safari не рендерит PDF в iframe, поэтому
-          используем превью везде. Каждая страница — отдельная картинка
-          с zoom по клику. */}
-      {pdf && pdfPreviews.length > 0 && (
-        <div
-          style={{
-            maxHeight: '50vh',
-            overflow: 'auto',
-            borderRadius: 10,
-            border: '1px solid var(--border)',
-            marginBottom: 10,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-            padding: 8,
-            background: 'var(--bg)',
-          }}
-        >
-          {pdfPreviews.map((src, idx) => (
-            <div key={idx} style={{ textAlign: 'center' }}>
-              <ZoomableImage
-                src={src}
-                alt={`${doc.title ?? 'PDF'} — стр. ${idx + 1}`}
-                style={{ maxWidth: '100%', display: 'block', margin: '0 auto' }}
-              />
-              {pdfPreviews.length > 1 && (
-                <div
-                  style={{
-                    fontSize: 10,
-                    color: 'var(--text-secondary)',
-                    marginTop: 4,
-                  }}
-                >
-                  стр. {idx + 1} из {pdfPreviews.length}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+      {/* PDF — рендерим страницы на клиенте через pdf.js. 
+          Это заменяет старую логику pdftoppm на бэкенде. */}
+      {url && pdf && (
+        <PdfRenderer url={url} title={doc.title ?? doc.original_name} />
       )}
 
       {url && (
