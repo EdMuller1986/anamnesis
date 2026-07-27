@@ -180,18 +180,35 @@ exportRoute.get('/pdf', async (c) => {
     </table>
     ` : ''}
 
+    ${specialists.results.length > 0 ? `
+    <h2>Ваши специалисты</h2>
+    <table>
+        <thead><tr><th>Специалист</th><th>Специализация</th><th>Статус</th><th>Заметки</th></tr></thead>
+        <tbody>
+        ${specialists.results.map(s => `
+            <tr>
+                <td style="width: 25%"><strong>${esc(s.name)}</strong></td>
+                <td style="width: 20%">${esc(s.specialization)}</td>
+                <td style="width: 15%">${esc(s.status) === 'active' ? 'На связи' : 'Архив'}</td>
+                <td>${esc(s.notes)}</td>
+            </tr>
+        `).join('')}
+        </tbody>
+    </table>
+    ` : ''}
+
     ${labResults.results.length > 0 ? `
     <h2>Последние результаты анализов</h2>
     <table>
-        <thead><tr><th>Дата</th><th>Анализ</th><th>Результат</th><th>Норма</th><th>Статус</th></tr></thead>
+        <thead><tr><th>Дата</th><th>Анализ / Параметр</th><th>Результат</th><th>Норма</th><th>Статус</th></tr></thead>
         <tbody>
-        ${labResults.results.slice(0, 10).map(l => `
+        ${labResults.results.slice(0, 20).map(l => `
             <tr>
                 <td style="width: 12%">${formatDate(l.test_date)}</td>
-                <td style="width: 25%"><strong>${esc(l.test_name)}</strong></td>
+                <td style="width: 30%"><strong>${esc(l.test_name)}</strong><br><small>${esc(l.parameter)}</small></td>
                 <td style="width: 15%">${esc(l.value)} ${esc(l.unit)}</td>
-                <td style="width: 15%">${esc(l.reference_range)}</td>
-                <td><span class="status-badge ${l.interpretation === 'critical' ? 'status-urgent' : ''}">${tr(labStatus, l.interpretation)}</span></td>
+                <td style="width: 15%">${l.ref_min !== null ? l.ref_min : ''}${l.ref_max !== null ? ' — ' + l.ref_max : ''} ${esc(l.unit)}</td>
+                <td><span class="status-badge ${l.status === 'critical' ? 'status-urgent' : ''}">${tr(labStatus, l.status)}</span></td>
             </tr>
         `).join('')}
         </tbody>
