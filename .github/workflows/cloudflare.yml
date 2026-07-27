@@ -131,6 +131,12 @@ jobs:
           B2_KEY_ID = "${{ secrets.B2_KEY_ID }}"
           B2_APPLICATION_KEY = "${{ secrets.B2_APPLICATION_KEY }}"
           ADMIN_TOKEN = "${{ secrets.ADMIN_TOKEN }}"
+          BACKUP_ENCRYPTION_KEY = "${{ secrets.BACKUP_ENCRYPTION_KEY }}"
+          TELEGRAM_BOT_TOKEN = "${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          TELEGRAM_CHAT_ID = "${{ secrets.TELEGRAM_CHAT_ID }}"
+
+          [triggers]
+          crons = ["0 2 * * *"]
           EOF
 
       - name: Run Backend Tests
@@ -143,6 +149,9 @@ jobs:
           B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
       - name: Deploy Worker
         run: npx wrangler@3 deploy

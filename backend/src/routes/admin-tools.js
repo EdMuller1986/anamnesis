@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import * as backup from '../services/backup';
 
 const adminTools = new Hono();
 
@@ -187,6 +188,13 @@ adminTools.get('/changelog', async (c) => {
   const limit = parseInt(c.req.query('limit') || '20', 10);
   const { results } = await c.env.DB.prepare("SELECT * FROM audit_log WHERE patient_id = ? ORDER BY id DESC LIMIT ?").bind(pid, limit).all();
   return c.json(results);
+});
+
+// POST /api/admin/tools/backup-now
+adminTools.post('/backup-now', async (c) => {
+  // Выполняем в фоне, чтобы не ждать долго ответа
+  c.executionCtx.waitUntil(backup.runBackup(c.env));
+  return c.json({ ok: true, message: 'Backup task started in background' });
 });
 
 export default adminTools;

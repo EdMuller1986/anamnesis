@@ -29,6 +29,7 @@ import prescriptions from './routes/prescriptions';
 import visitDiagnoses from './routes/visit-diagnoses';
 import exportRoute from './routes/export';
 import webauthn from './routes/webauthn';
+import * as backup from './services/backup';
 
 const app = new Hono();
 
@@ -206,4 +207,11 @@ app.post('/api/auth/logout', async (c) => {
   return c.json({ message: 'Logged out' });
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(event, env, ctx) {
+    if (event.cron === '0 2 * * *') {
+      ctx.waitUntil(backup.runBackup(env));
+    }
+  },
+};
