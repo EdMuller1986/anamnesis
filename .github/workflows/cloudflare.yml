@@ -45,6 +45,10 @@ jobs:
           check_presence "${{ secrets.B2_APPLICATION_KEY }}" "B2_APPLICATION_KEY"
           check_presence "${{ secrets.VITE_API_URL }}" "VITE_API_URL"
           check_presence "${{ secrets.CORS_ORIGINS }}" "CORS_ORIGINS"
+          check_presence "${{ secrets.ADMIN_TOKEN }}" "ADMIN_TOKEN"
+          check_presence "${{ secrets.BACKUP_ENCRYPTION_KEY }}" "BACKUP_ENCRYPTION_KEY"
+          check_presence "${{ secrets.TELEGRAM_BOT_TOKEN }}" "TELEGRAM_BOT_TOKEN"
+          check_presence "${{ secrets.TELEGRAM_CHAT_ID }}" "TELEGRAM_CHAT_ID"
 
           if [ $MISSING -eq 1 ]; then
             exit 1
@@ -92,6 +96,25 @@ jobs:
             echo "Response: $AUTH_CHECK"
             exit 1
           fi
+
+      - name: Functional Check - Telegram
+        run: |
+          echo "Testing Telegram Bot Token..."
+          TG_CHECK=$(curl -s https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/getMe)
+          if echo "$TG_CHECK" | grep -q '"ok":true'; then
+            echo "✅ Telegram Bot Credentials OK"
+          else
+            echo "::error::Telegram Bot Token Validation Failed."
+            echo "Response: $TG_CHECK"
+            exit 1
+          fi
+
+      - name: Functional Check - Backup Encryption
+        run: |
+          echo "Testing Encryption logic with provided key..."
+          node backend/src/services/verify-encryption.js
+        env:
+          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
 
   deploy-backend:
     runs-on: ubuntu-latest
