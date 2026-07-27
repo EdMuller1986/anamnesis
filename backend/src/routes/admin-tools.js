@@ -197,4 +197,38 @@ adminTools.post('/backup-now', async (c) => {
   return c.json({ ok: true, message: 'Backup task started in background' });
 });
 
+// POST /api/admin/tools/restore-from-backup
+adminTools.post('/restore-from-backup', async (c) => {
+  const pid = c.get('patientId') || 1;
+  try {
+    // 1. Получаем данные из последнего бэкапа в B2
+    const state = await backup.restoreFromLatest(c.env);
+    
+    // 2. Вызываем логику импорта (эмулируем запрос к /api/admin/import)
+    // Но так как мы внутри кода, мы просто подготовим такой же batch
+    // Для этого нам нужно передать управление эндпоинту или вынести логику.
+    // Чтобы не дублировать сложный код импорта, мы сделаем "внутренний fetch"
+    const importUrl = new URL('/api/admin/import', c.req.url).toString();
+    const res = await c.app.fetch(new Request(importUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Admin-Token': c.req.header('X-Admin-Token') || ''
+      },
+      body: JSON.stringify({ ...state, wipe: true })
+    }), c.env);
+
+    const result = await res.json();
+    return c.json({ 
+      ok: res.ok, 
+      message: 'Auto-restore completed', 
+      import_details: result 
+    }, res.status);
+
+  } catch (err) {
+    console.error('[AutoRestore] Failed:', err);
+    return c.json({ error: 'Auto-restore failed: ' + err.message }, 500);
+  }
+});
+
 export default adminTools;

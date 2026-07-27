@@ -16,6 +16,11 @@ on:
         required: false
         default: 'true'
         type: boolean
+      auto_restore:
+        description: 'Auto-restore from B2 backup after deploy (WIPES DATA)'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   validate-secrets:
@@ -178,6 +183,25 @@ jobs:
 
       - name: Deploy Worker
         run: npx wrangler@3 deploy
+        working-directory: backend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Trigger Auto-Restore (Optional)
+        if: ${{ github.event.inputs.auto_restore == 'true' }}
+        run: |
+          # Give it a few seconds for the new version to settle
+          sleep 10
+          echo "Triggering automated restoration from B2..."
+          # Note: We use the deployed URL or relative path if possible. 
+          # Here we'll use the secret VITE_API_URL or try to infer it.
+          # For reliability, we'll try to find the worker URL via wrangler.
+          WORKER_URL=$(npx wrangler@3 whoami | grep -o 'https://[^ ]*\.workers\.dev' | head -1)
+          if [ -z "$WORKER_URL" ]; then WORKER_URL="${{ secrets.VITE_API_URL }}"; fi
+          
+          curl -f -X POST "${WORKER_URL}/admin/tools/restore-from-backup" \
+            -H "X-Admin-Token: ${{ secrets.ADMIN_TOKEN }}"
         working-directory: backend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
