@@ -162,6 +162,9 @@ jobs:
           BACKUP_ENCRYPTION_KEY = "${{ secrets.BACKUP_ENCRYPTION_KEY }}"
           TELEGRAM_BOT_TOKEN = "${{ secrets.TELEGRAM_BOT_TOKEN }}"
           TELEGRAM_CHAT_ID = "${{ secrets.TELEGRAM_CHAT_ID }}"
+          WEBAUTHN_RP_ID = "anamnesis-frontend.pages.dev"
+          WEBAUTHN_ORIGIN = "https://anamnesis-frontend.pages.dev"
+          WEBAUTHN_RP_NAME = "Anamnesis"
 
           [triggers]
           crons = ["0 2 * * *", "*/15 * * * *"]
