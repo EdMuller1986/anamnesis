@@ -104,9 +104,8 @@ These are HTTP endpoints used by the AI coordinator:
 - [ ] `/api/admin/tools/changelog`
 - [ ] `/api/admin/tools/mark-reviewed`
 - [ ] `/api/admin/tools/since-last-review`
-- [ ] `/api/admin/tools/backup-now`
-
-### Full-Text Search (FTS5)
+- [x] Implement `/api/admin/tools/backup-now`
+- [x] Complete AI CRUD support for all medical tables (Lab results, Vaccinations, Growth, Specialists, Plans, Errors)
 - [x] Verify FTS5 support in Cloudflare D1 (Confirmed: Supported)
 - [x] Create FTS5 virtual tables in migration (`0001_initial.sql`)
 - [x] Add FTS triggers for `timeline`, `documents`, and `comments`

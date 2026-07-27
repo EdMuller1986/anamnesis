@@ -17,6 +17,9 @@ patientContext.get('/', async (c) => {
     prescriptions: c.env.DB.prepare('SELECT * FROM prescriptions WHERE patient_id = ?').bind(pid).all(),
     visit_diagnoses: c.env.DB.prepare('SELECT * FROM visit_diagnoses WHERE patient_id = ?').bind(pid).all(),
     medical_errors: c.env.DB.prepare('SELECT * FROM medical_errors WHERE patient_id = ?').bind(pid).all(),
+    lab_results: c.env.DB.prepare('SELECT * FROM lab_results WHERE patient_id = ?').bind(pid).all(),
+    vaccinations: c.env.DB.prepare('SELECT * FROM vaccinations WHERE patient_id = ?').bind(pid).all(),
+    growth_log: c.env.DB.prepare('SELECT * FROM growth_log WHERE patient_id = ?').bind(pid).all(),
   };
 
   try {
