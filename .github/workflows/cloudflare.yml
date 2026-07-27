@@ -159,7 +159,7 @@ jobs:
           TELEGRAM_CHAT_ID = "${{ secrets.TELEGRAM_CHAT_ID }}"
 
           [triggers]
-          crons = ["0 2 * * *"]
+          crons = ["0 2 * * *", "*/15 * * * *"]
           EOF
 
       - name: Run Backend Tests

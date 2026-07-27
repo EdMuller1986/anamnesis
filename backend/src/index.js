@@ -30,6 +30,7 @@ import visitDiagnoses from './routes/visit-diagnoses';
 import exportRoute from './routes/export';
 import webauthn from './routes/webauthn';
 import * as backup from './services/backup';
+import * as scheduler from './services/scheduler';
 
 const app = new Hono();
 
@@ -212,6 +213,8 @@ export default {
   async scheduled(event, env, ctx) {
     if (event.cron === '0 2 * * *') {
       ctx.waitUntil(backup.runBackup(env));
+    } else if (event.cron === '*/15 * * * *') {
+      ctx.waitUntil(scheduler.checkReminders(env));
     }
   },
 };

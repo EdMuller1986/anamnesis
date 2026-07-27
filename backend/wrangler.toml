@@ -15,4 +15,4 @@ B2_BUCKET_NAME = "YOUR_BUCKET_NAME"
 B2_KEY_ID = "YOUR_B2_KEY_ID"
 
 [triggers]
-crons = ["0 2 * * *"]
+crons = ["0 2 * * *", "*/15 * * * *"]
