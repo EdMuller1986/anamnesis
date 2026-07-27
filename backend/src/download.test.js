@@ -32,21 +32,21 @@ const mockEnv = {
 
 describe('Document Download Authorization', () => {
   it('GET /api/documents/1/file returns 401 without token', async () => {
-    const res = await app.request('/api/documents/1/file', {}, mockEnv);
+    const res = await app.fetch(new Request('http://localhost/api/documents/1/file'), mockEnv);
     expect(res.status).toBe(401);
     const data = await res.json();
     expect(data.error).toContain('Unauthorized');
   });
 
   it('GET /api/documents/1/file returns 302 with token in header', async () => {
-    const res = await app.request('/api/documents/1/file', {
+    const res = await app.fetch(new Request('http://localhost/api/documents/1/file', {
       headers: { 'X-Session-Token': 'valid-token' }
-    }, mockEnv);
+    }), mockEnv);
     expect(res.status).toBe(302);
   });
 
   it('GET /api/documents/1/file returns 302 with token in query param', async () => {
-    const res = await app.request('/api/documents/1/file?token=valid-token', {}, mockEnv);
+    const res = await app.fetch(new Request('http://localhost/api/documents/1/file?token=valid-token'), mockEnv);
     expect(res.status).toBe(302);
     expect(res.headers.get('Location')).toBeDefined();
   });

@@ -6,9 +6,8 @@ const mockDB = {
     bind: () => ({
       first: () => Promise.resolve({ one: 1 }),
       all: () => Promise.resolve({ results: [] }),
-      run: () => Promise.resolve({ success: true }),
-    }),
-    first: () => Promise.resolve({ one: 1 }),
+      run: () => Promise.resolve({ success: true })
+    })
   }),
 };
 
@@ -24,24 +23,24 @@ const mockEnv = {
 
 describe('Anamnesis API Integration Tests', () => {
   it('GET /api/health returns 200', async () => {
-    const res = await app.request('/api/health', {}, mockEnv);
+    const res = await app.fetch(new Request('http://localhost/api/health'), mockEnv);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: 'ok', db: 'connected' });
   });
 
   it('GET /api/version returns 200', async () => {
-    const res = await app.request('/api/version', {}, mockEnv);
+    const res = await app.fetch(new Request('http://localhost/api/version'), mockEnv);
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.version).toContain('serverless');
   });
 
   it('POST /api/auth/login returns error when not configured', async () => {
-    const res = await app.request('/api/auth/login', {
+    const res = await app.fetch(new Request('http://localhost/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ pin: '1234' }),
       headers: { 'Content-Type': 'application/json' }
-    }, {
+    }), {
       ...mockEnv,
       DB: {
         ...mockDB,
@@ -58,32 +57,28 @@ describe('Anamnesis API Integration Tests', () => {
   });
 
   it('GET /api/patient returns 401 without token', async () => {
-    const res = await app.request('/api/patient', {}, mockEnv);
+    const res = await app.fetch(new Request('http://localhost/api/patient'), mockEnv);
     expect(res.status).toBe(401);
   });
 
   it('GET /api/admin/tools returns 403 with invalid admin token', async () => {
-    const res = await app.request('/api/admin/tools', {
+    const res = await app.fetch(new Request('http://localhost/api/admin/tools', {
       headers: { 'X-Admin-Token': 'wrong' }
-    }, mockEnv);
+    }), mockEnv);
     expect(res.status).toBe(403);
   });
 
   it('GET /api/admin/tools returns 200 with valid admin token', async () => {
-    // We need to mock the route handler too if we want it to pass fully, 
-    // but the middleware check is what we verify here.
-    const res = await app.request('/api/admin/tools', {
+    const res = await app.fetch(new Request('http://localhost/api/admin/tools', {
       headers: { 'X-Admin-Token': 'test-admin-token' }
-    }, mockEnv);
-    // It might be 404 or 500 if the underlying route fails due to more missing mocks,
-    // but 403 means middleware BLOCKED it, so NOT 403 means middleware ALLOWED it.
+    }), mockEnv);
     expect(res.status).not.toBe(403);
   });
 
   it('GET /api/documents/:id/file returns 302 redirect', async () => {
-    const res = await app.request('/api/documents/1/file', {
+    const res = await app.fetch(new Request('http://localhost/api/documents/1/file', {
       headers: { 'X-Session-Token': 'valid-token' }
-    }, {
+    }), {
       ...mockEnv,
       DB: {
         prepare: (q) => ({
