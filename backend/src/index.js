@@ -29,6 +29,7 @@ import prescriptions from './routes/prescriptions';
 import visitDiagnoses from './routes/visit-diagnoses';
 import exportRoute from './routes/export';
 import webauthn from './routes/webauthn';
+import auth from './routes/auth';
 import * as backup from './services/backup';
 import * as scheduler from './services/scheduler';
 
@@ -82,6 +83,7 @@ const authMiddleware = async (c, next) => {
   // 1. Публичные эндпоинты
   const publicPaths = new Set([
     '/api/auth/login',
+    '/api/auth/verify-device',
     '/api/health',
     '/api/version',
     '/api/webauthn/available'
@@ -144,6 +146,7 @@ app.use('/api/admin/*', async (c, next) => {
 app.get('/api/health', (c) => c.json({ status: 'ok', db: 'connected' }));
 app.get('/api/version', (c) => c.json({ version: '2.0.0-serverless' }));
 app.route('/api/webauthn', webauthn);
+app.route('/api/auth', auth);
 
 // ── Эндпоинты ──────────────────────────────────────────────
 
@@ -170,43 +173,6 @@ app.route('/api/search', search);
 app.route('/api/prescriptions', prescriptions);
 app.route('/api/visit-diagnoses', visitDiagnoses);
 app.route('/api/export', exportRoute);
-
-// Вход по ПИН-коду
-app.post('/api/auth/login', async (c) => {
-  const { pin } = await c.req.json();
-  const { patientId, ip, ua, deviceId } = getMeta(c);
-
-  try {
-    const lockout = await authSession.checkLockout(c.env.DB, ip, deviceId);
-    if (lockout.locked) return c.json({ error: 'Too many attempts', remaining_sec: Math.ceil(lockout.remainingMs / 1000) }, 429);
-    
-    const storedHash = await c.env.DB.prepare('SELECT value FROM app_settings WHERE key = ?').bind(`pin_hash_${patientId}`).first('value');
-    if (!storedHash) return c.json({ error: 'PIN not configured' }, 500);
-    
-    if (!(await authSession.verifyPin(pin, storedHash))) {
-      const fail = await authSession.recordAuthFailure(c.env.DB, ip, deviceId, patientId);
-      return c.json({ error: 'Invalid PIN', attempts: fail.attempts }, 401);
-    }
-
-    await authSession.resetAuthFailures(c.env.DB, ip, deviceId);
-    const token = await authSession.createSession(c.env.DB, patientId, ip, ua, deviceId);
-    return c.json({ token, expires_days: 14 });
-  } catch (err) {
-    return c.json({ error: 'Login error', message: err.message }, 500);
-  }
-});
-
-// Статус и выход
-app.get('/api/auth/check', async (c) => {
-  const session = c.get('session');
-  return c.json({ ok: true, patient_id: session.patient_id, expires_at: session.expires_at });
-});
-
-app.post('/api/auth/logout', async (c) => {
-  const token = c.req.header('X-Session-Token') || getCookie(c, 'session');
-  if (token) await c.env.DB.prepare('UPDATE sessions SET revoked = 1 WHERE token = ?').bind(token).run();
-  return c.json({ message: 'Logged out' });
-});
 
 export default {
   fetch: app.fetch,

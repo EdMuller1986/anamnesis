@@ -252,4 +252,35 @@ webauthn.get('/available', async (c) => {
   return c.json({ available: (row?.c || 0) > 0, count: row?.c || 0 });
 });
 
+// GET /api/webauthn/credentials — список всех passkeys пациента
+webauthn.get('/credentials', async (c) => {
+  const db = c.env.DB;
+  const patientId = c.get('patientId');
+
+  const { results } = await db.prepare(`
+    SELECT id, device_id, nickname, device_type, backed_up, created_at, last_used_at,
+           substr(credential_id, 1, 12) AS credential_short
+    FROM webauthn_credentials
+    WHERE patient_id = ?
+    ORDER BY created_at DESC
+  `).bind(patientId).all();
+
+  return c.json({ credentials: results });
+});
+
+// DELETE /api/webauthn/credentials/:id — удалить passkey
+webauthn.delete('/credentials/:id', async (c) => {
+  const db = c.env.DB;
+  const patientId = c.get('patientId');
+  const id = parseInt(c.req.param('id'), 10);
+
+  const info = await db.prepare(
+    'DELETE FROM webauthn_credentials WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).run();
+
+  if (info.meta.changes === 0) return c.json({ error: 'Credential не найден' }, 404);
+
+  return c.json({ ok: true });
+});
+
 export default webauthn;

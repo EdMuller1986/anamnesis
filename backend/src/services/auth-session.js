@@ -4,11 +4,14 @@ const PBKDF2_ITERATIONS = 100000;
 const SESSION_MAX_AGE_DAYS = 14;
 const SESSION_MS = SESSION_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
 
-export async function hashPin(pin) {
+/**
+ * Хеширование значения (PIN или контрольное слово) через PBKDF2.
+ */
+export async function hashValue(value) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode(pin),
+    new TextEncoder().encode(String(value)),
     { name: 'PBKDF2' },
     false,
     ['deriveBits']
@@ -30,7 +33,10 @@ export async function hashPin(pin) {
   return `${saltHex}$${PBKDF2_ITERATIONS}$${hashHex}`;
 }
 
-export async function verifyPin(pin, stored) {
+/**
+ * Проверка соответствия значения хешу.
+ */
+export async function verifyValue(value, stored) {
   if (!stored || !stored.includes('$')) return false;
   const [saltHex, iterations, hashHex] = stored.split('$');
   const salt = hexToBytes(saltHex);
@@ -38,7 +44,7 @@ export async function verifyPin(pin, stored) {
 
   const key = await crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode(pin),
+    new TextEncoder().encode(String(value)),
     { name: 'PBKDF2' },
     false,
     ['deriveBits']
@@ -56,11 +62,12 @@ export async function verifyPin(pin, stored) {
   );
 
   const actualHashHex = bytesToHex(new Uint8Array(hash));
-  // Timing safe equal is not directly in SubtleCrypto for bits, 
-  // but string comparison for hex hashes is generally okay here 
-  // since the hash is already a random-looking string.
   return actualHashHex === hashHex;
 }
+
+// Alias for backward compatibility if needed, though we'll update calls
+export const hashPin = hashValue;
+export const verifyPin = verifyValue;
 
 export async function createSession(db, patientId, ip, ua, deviceId) {
   const token = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
@@ -70,6 +77,19 @@ export async function createSession(db, patientId, ip, ua, deviceId) {
     `INSERT INTO sessions (token, patient_id, device_id, expires_at, ip, user_agent)
      VALUES (?, ?, ?, ?, ?, ?)`
   ).bind(token, patientId, deviceId, expiresAt, ip, ua).run();
+
+  // Также обновляем/создаем запись в known_devices
+  if (deviceId) {
+    await db.prepare(`
+      INSERT INTO known_devices (device_id, patient_id, last_ip, user_agent, last_seen_at, revoked)
+      VALUES (?, ?, ?, ?, datetime('now'), 0)
+      ON CONFLICT(device_id, patient_id) DO UPDATE SET
+        last_ip = excluded.last_ip,
+        user_agent = excluded.user_agent,
+        last_seen_at = excluded.last_seen_at,
+        revoked = 0
+    `).bind(deviceId, patientId, ip, ua).run();
+  }
 
   return token;
 }
@@ -84,6 +104,15 @@ export async function touchSession(db, token, ip) {
   await db.prepare(
     'UPDATE sessions SET last_seen_at = datetime("now"), ip = ? WHERE token = ?'
   ).bind(ip, token).run();
+}
+
+/**
+ * Разлогинить все сессии пациента, кроме указанной.
+ */
+export async function revokeAllOtherSessions(db, patientId, exceptToken) {
+  await db.prepare(
+    'UPDATE sessions SET revoked = 1 WHERE patient_id = ? AND token != ?'
+  ).bind(patientId, exceptToken).run();
 }
 
 // Lockout logic (simplified for Worker context)
