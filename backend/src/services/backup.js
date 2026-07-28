@@ -18,8 +18,18 @@ export async function runBackup(env) {
   try {
     const data = await getFullState(env.DB, patientId);
     const json = JSON.stringify(data);
+    
+    // 0. Дедупликация (проверка хеша)
+    const newHash = await computeHash(json);
+    const lastHash = await env.DB.prepare("SELECT value FROM app_settings WHERE key = 'last_backup_hash'").first();
+    
+    if (lastHash && lastHash.value === newHash) {
+      console.log('[Backup] No changes detected, skipping backup');
+      return;
+    }
+
     const dateStr = new Date().toISOString().slice(0, 10);
-    const fileName = `anamnesis-backup-${dateStr}.json.gz.enc`;
+    const fileName = `backups/anamnesis-backup-${dateStr}.json.gz.enc`;
 
     const compressed = await compressData(json);
     const encrypted = await encryptData(compressed, password);
@@ -27,18 +37,58 @@ export async function runBackup(env) {
     // 1. Отправляем в Telegram (для уведомления)
     const sizeMb = (encrypted.byteLength / 1024 / 1024).toFixed(3);
     const caption = `<b>[DAILY BACKUP]</b> ${dateStr} (${sizeMb} MB)`;
-    await telegram.sendDocument(env, encrypted, fileName, caption);
+    await telegram.sendDocument(env, encrypted, `anamnesis-backup-${dateStr}.json.gz.enc`, caption);
 
     // 2. Сохраняем в B2 как "последний актуальный" (для авто-восстановления)
-    const storagePath = 'system/latest-backup.json.gz.enc';
-    await b2.uploadFile(env, storagePath, encrypted, 'application/octet-stream');
+    await b2.uploadFile(env, 'system/latest-backup.json.gz.enc', encrypted, 'application/octet-stream');
+    
+    // 3. Сохраняем в архивную папку B2
+    await b2.uploadFile(env, fileName, encrypted, 'application/octet-stream');
 
-    console.log(`[Backup] Successfully saved to Telegram and B2: ${storagePath}`);
+    // 4. Сохраняем новый хеш
+    await env.DB.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_backup_hash', ?)")
+      .bind(newHash).run();
+
+    // 5. Ротация (оставляем только 5 последних в папке backups/)
+    await rotateBackups(env);
+
+    console.log(`[Backup] Successfully saved to Telegram and B2: ${fileName}`);
 
   } catch (err) {
     console.error('[Backup] Error:', err);
     await telegram.sendMessage(env, `<b>[CRITICAL] Daily backup failed</b>\n\n<code>${err.message}</code>`);
   }
+}
+
+/**
+ * Ротация бэкапов в B2: оставляем только 5 последних файлов в папке backups/
+ */
+async function rotateBackups(env) {
+  try {
+    const files = await b2.listFiles(env, 'backups/');
+    if (files.length <= 5) return;
+
+    // Сортируем по дате изменения (старые в начале)
+    const sorted = files.sort((a, b) => new Date(a.LastModified) - new Date(b.LastModified));
+    const toDelete = sorted.slice(0, sorted.length - 5);
+
+    for (const file of toDelete) {
+      console.log(`[Backup] Rotating (deleting) old backup: ${file.Key}`);
+      await b2.deleteFile(env, file.Key);
+    }
+  } catch (err) {
+    console.error('[Backup] Rotation failed:', err);
+  }
+}
+
+/**
+ * Вычисление хеша SHA-256
+ */
+async function computeHash(text) {
+  const msgUint8 = new TextEncoder().encode(text);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**

@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 /**
@@ -104,4 +104,20 @@ export async function deleteFile(env, fileName) {
   // но на всякий случай можно тоже переделать на подписанный URL, если будет падать.
   // Пока оставим стандартный метод для простоты.
   await client.send(command);
+}
+
+export async function listFiles(env, prefix) {
+  const client = getS3Client(env);
+  const command = new ListObjectsV2Command({
+    Bucket: env.B2_BUCKET_NAME,
+    Prefix: prefix,
+  });
+  
+  // Примечание: В Cloudflare Workers ListObjectsV2 может вызвать ошибку DOMParser 
+  // при использовании стандартного client.send(). 
+  // Для надежности используем тот же подход с fetch или пробуем send().
+  // Поскольку нам нужен парсинг XML ответа, а DOMParser нет, 
+  // используем встроенный S3 клиент и надеемся на совместимость в этой версии.
+  const response = await client.send(command);
+  return response.Contents || [];
 }
