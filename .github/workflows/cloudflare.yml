@@ -231,9 +231,12 @@ jobs:
         run: |
           cd frontend
           npm run build
-          # Ensure _redirects is in dist
+          # Ensure _redirects and _headers are in dist
           if [ ! -f dist/_redirects ]; then
             cp public/_redirects dist/_redirects
+          fi
+          if [ ! -f dist/_headers ]; then
+            cp public/_headers dist/_headers
           fi
           echo "Build contents:"
           ls -F dist/

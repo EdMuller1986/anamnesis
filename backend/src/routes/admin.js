@@ -103,11 +103,21 @@ admin.post('/import', async (c) => {
   const changeLog = [];
   const batch = [];
 
-  // This is a simplified migration of the import logic.
-  // Real implementation should handle all tables and actions.
-  // D1 batch() is used to ensure atomicity.
-
   try {
+    // 0. Optional Wipe (Full Restore)
+    if (data.wipe === true) {
+      const tablesToWipe = [
+        'timeline', 'documents', 'diagnoses', 'medications', 
+        'specialists', 'lab_results', 'vaccinations', 'growth_log', 
+        'plan', 'medical_errors', 'reminders', 'prescriptions',
+        'ai_requests', 'visit_diagnoses'
+      ];
+      for (const t of tablesToWipe) {
+        batch.push(db.prepare(`DELETE FROM ${t} WHERE patient_id = ?`).bind(pid));
+      }
+      changeLog.push('Wiped all existing patient data for full restore');
+    }
+
     // 1. Process Timeline
     if (Array.isArray(data.timeline)) {
       for (const event of data.timeline) {
@@ -298,6 +308,39 @@ admin.post('/import', async (c) => {
           batch.push(db.prepare('INSERT INTO reminders (title, remind_at, status, patient_id) VALUES (?, ?, ?, ?)')
             .bind(r.title, r.remind_at, r.status || 'pending', pid));
           changeLog.push(`Added reminder: ${r.title}`);
+        }
+      }
+    }
+
+    // 11. Process Prescriptions
+    if (Array.isArray(data.prescriptions)) {
+      for (const pr of data.prescriptions) {
+        if (pr.id && pr._action === 'update') {
+          batch.push(db.prepare('UPDATE prescriptions SET medication_id = ?, diagnosis_id = ?, specialist_id = ?, timeline_id = ?, dosage = ?, frequency = ?, start_date = ?, end_date = ?, course_status = ?, stop_reason = ?, duration_text = ?, rationale = ? WHERE id = ? AND patient_id = ?')
+            .bind(pr.medication_id, pr.diagnosis_id || null, pr.specialist_id || null, pr.timeline_id || null, pr.dosage || null, pr.frequency || null, pr.start_date || null, pr.end_date || null, pr.course_status || 'active', pr.stop_reason || null, pr.duration_text || null, pr.rationale || null, pr.id, pid));
+          changeLog.push(`Updated prescription #${pr.id}`);
+        } else if (pr.id && pr._action === 'delete') {
+          batch.push(db.prepare('DELETE FROM prescriptions WHERE id = ? AND patient_id = ?').bind(pr.id, pid));
+          changeLog.push(`Deleted prescription #${pr.id}`);
+        } else if (!pr.id) {
+          batch.push(db.prepare('INSERT INTO prescriptions (medication_id, diagnosis_id, specialist_id, timeline_id, dosage, frequency, start_date, end_date, course_status, stop_reason, duration_text, rationale, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(pr.medication_id, pr.diagnosis_id || null, pr.specialist_id || null, pr.timeline_id || null, pr.dosage || null, pr.frequency || null, pr.start_date || null, pr.end_date || null, pr.course_status || 'active', pr.stop_reason || null, pr.duration_text || null, pr.rationale || null, pid));
+          changeLog.push(`Added prescription for medication #${pr.medication_id}`);
+        }
+      }
+    }
+
+    // 12. Process Visit Diagnoses
+    if (Array.isArray(data.visit_diagnoses)) {
+      for (const vd of data.visit_diagnoses) {
+        if (vd._action === 'delete') {
+          batch.push(db.prepare('DELETE FROM visit_diagnoses WHERE visit_id = ? AND diagnosis_id = ? AND patient_id = ?').bind(vd.visit_id, vd.diagnosis_id, pid));
+          changeLog.push(`Removed diagnosis #${vd.diagnosis_id} from visit #${vd.visit_id}`);
+        } else {
+          // Use INSERT OR REPLACE for many-to-many
+          batch.push(db.prepare('INSERT OR REPLACE INTO visit_diagnoses (visit_id, diagnosis_id, relation, patient_id) VALUES (?, ?, ?, ?)')
+            .bind(vd.visit_id, vd.diagnosis_id, vd.relation || 'discussed', pid));
+          changeLog.push(`Linked diagnosis #${vd.diagnosis_id} to visit #${vd.visit_id}`);
         }
       }
     }

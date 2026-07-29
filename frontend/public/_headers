@@ -1,0 +1,5 @@
+/*
+  Permissions-Policy: publickey-credentials-create=(self), publickey-credentials-get=(self)
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin

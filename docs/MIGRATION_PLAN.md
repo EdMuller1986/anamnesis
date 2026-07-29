@@ -169,11 +169,18 @@ These are HTTP endpoints used by the AI coordinator:
 
 ---
 
-## 🧪 Phase 6: Testing & Quality Assurance (PLANNED)
+## 🧪 Phase 6: Testing & Quality Assurance (IN PROGRESS)
 
-See [`TESTING_PLAN.md`](TESTING_PLAN.md) for detailed test strategy.
-
-**Estimated time:** 5-7 days
+### Integration & Data Integrity
+- [x] API Integration Tests (`app.test.js`)
+- [x] Download authorization tests (`download.test.js`)
+- [x] Secret functional validation in CI/CD
+- [ ] Implement Full Verification Cycle:
+  1. Empty state verification after deploy
+  2. Automated demo data population via API
+  3. Export report verification
+  4. AI Coordinator: Wipe demo data and Restore from Telegram Backup
+- [ ] Debug and verify Restore from Backup functionality (Phase 1)
 
 ---
 
