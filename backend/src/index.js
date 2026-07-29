@@ -49,7 +49,14 @@ app.use('*', cors({
   credentials: true,
 }));
 
-app.use('*', secureHeaders());
+app.use('*', secureHeaders({
+  contentSecurityPolicy: false, // Отключаем CSP в Workers, так как он может конфликтовать с фронтендом на другом домене
+  xFrameOptions: false,
+  permissionsPolicy: {
+    'publickey-credentials-get': ['*'],
+    'publickey-credentials-create': ['*'],
+  },
+}));
 
 app.onError((err, c) => {
   console.error(`Worker Error: ${err.message}`, err.stack);
