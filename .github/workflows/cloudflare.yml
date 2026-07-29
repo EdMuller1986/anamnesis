@@ -37,8 +37,10 @@ jobs:
           MISSING=0
           check_presence() {
             if [ -z "${1}" ]; then
-              echo "❌ Error: Secret ${2} is missing!"
+              echo "::error::Secret ${2} is missing!"
               MISSING=1
+            else
+              echo "✅ Secret ${2} is present"
             fi
           }
           check_presence "${{ secrets.CLOUDFLARE_API_TOKEN }}" "CLOUDFLARE_API_TOKEN"
