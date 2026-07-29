@@ -441,7 +441,7 @@ function ChangePinDialog({
   const { login } = useAuth();
 
   const submit = async () => {
-    if (!/^\d{4,10}$/.test(newPin)) return onError('PIN должен быть 4-10 цифр');
+    if (!/^\d{6}$/.test(newPin)) return onError('PIN должен быть ровно 6 цифр');
     if (newPin !== confirmPin) return onError('Новые PIN не совпадают');
 
     setBusy(true);
