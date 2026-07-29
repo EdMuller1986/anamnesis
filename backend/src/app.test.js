@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import app from './index';
+
+// Mock global fetch to avoid real network requests and fix test failures
+global.fetch = vi.fn(() =>
+  Promise.resolve(new Response('dummy pdf content', {
+    status: 200,
+    headers: { 'Content-Type': 'application/pdf' }
+  }))
+);
 
 const mockDB = {
   prepare: (query) => ({
@@ -75,7 +83,7 @@ describe('Anamnesis API Integration Tests', () => {
     expect(res.status).not.toBe(403);
   });
 
-  it('GET /api/documents/:id/file returns 302 redirect', async () => {
+  it('GET /api/documents/:id/file returns 200 streaming', async () => {
     const res = await app.fetch(new Request('http://localhost/api/documents/1/file', {
       headers: { 'X-Session-Token': 'valid-token' }
     }), {
@@ -84,7 +92,7 @@ describe('Anamnesis API Integration Tests', () => {
         prepare: (q) => ({
           bind: (...args) => ({
             first: () => {
-              if (q.includes('sessions')) return Promise.resolve({ patient_id: 1 });
+              if (q.includes('sessions')) return Promise.resolve({ patient_id: 1, expires_at: '2099-01-01' });
               return Promise.resolve({ id: 1, file_path: 'test.pdf', title: 'Test', mime_type: 'application/pdf' });
             },
             run: () => Promise.resolve({ success: true })
@@ -92,7 +100,8 @@ describe('Anamnesis API Integration Tests', () => {
         })
       }
     });
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toContain('s3.us-west-004.backblazeb2.com');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('application/pdf');
+    expect(res.headers.get('Content-Disposition')).toContain('Test');
   });
 });

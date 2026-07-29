@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import app from './index';
+
+// Mock global fetch
+global.fetch = vi.fn(() =>
+  Promise.resolve(new Response('dummy content', {
+    status: 200,
+    headers: { 'Content-Type': 'text/html' }
+  }))
+);
 
 // Demo data matching migrations/demo_data.sql but in JSON format for the API
 const DEMO_DATA = {

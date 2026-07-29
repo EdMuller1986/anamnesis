@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeAll } from 'vitest';
 import app from './index';
+
+// Mock global fetch to avoid real network requests and fix test failures
+global.fetch = vi.fn(() =>
+  Promise.resolve(new Response('dummy pdf content', {
+    status: 200,
+    headers: { 'Content-Type': 'application/pdf' }
+  }))
+);
 
 const mockDB = {
   prepare: (query) => ({
@@ -38,16 +46,17 @@ describe('Document Download Authorization', () => {
     expect(data.error).toContain('Unauthorized');
   });
 
-  it('GET /api/documents/1/file returns 302 with token in header', async () => {
+  it('GET /api/documents/1/file returns 200 with token in header', async () => {
     const res = await app.fetch(new Request('http://localhost/api/documents/1/file', {
       headers: { 'X-Session-Token': 'valid-token' }
     }), mockEnv);
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('application/pdf');
   });
 
-  it('GET /api/documents/1/file returns 302 with token in query param', async () => {
+  it('GET /api/documents/1/file returns 200 with token in query param', async () => {
     const res = await app.fetch(new Request('http://localhost/api/documents/1/file?token=valid-token'), mockEnv);
-    expect(res.status).toBe(302);
-    expect(res.headers.get('Location')).toBeDefined();
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('application/pdf');
   });
 });
