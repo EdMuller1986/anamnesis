@@ -21,9 +21,19 @@ documents.get('/:id/file', async (c) => {
   if (!doc) return c.json({ error: 'Not found' }, 404);
 
   try {
-    const url = await b2.getDownloadUrl(c.env, doc.file_path, doc.title, doc.mime_type);
-    return c.redirect(url);
+    const url = await b2.getDownloadUrl(c.env, doc.file_path);
+    // Стримим файл через Worker, чтобы избежать проблем с CORS на B2 при предпросмотре
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`B2 storage responded with ${res.status}`);
+
+    const fileName = doc.title || doc.original_name || 'document';
+    return c.body(res.body, 200, {
+      'Content-Type': doc.mime_type || 'application/octet-stream',
+      'Content-Disposition': `inline; filename="${encodeURIComponent(fileName)}"`,
+      'Cache-Control': 'public, max-age=3600',
+    });
   } catch (e) {
+    console.error('[Documents] Download error:', e);
     return c.json({ error: 'Storage error', message: e.message }, 500);
   }
 });

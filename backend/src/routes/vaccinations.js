@@ -18,10 +18,13 @@ vaccinations.get('/', async (c) => {
 
   const { results } = await c.env.DB.prepare(query).bind(...params).all();
   
-  const parsedResults = results.map(row => ({
-    ...row,
-    photos: JSON.parse(row.photos || '[]')
-  }));
+  const parsedResults = results.map(row => {
+    const photoPaths = JSON.parse(row.photos || '[]');
+    return {
+      ...row,
+      photos: photoPaths.map(p => `/api/vaccinations/photos/${p}`)
+    };
+  });
   
   return c.json(parsedResults);
 });
@@ -33,9 +36,12 @@ vaccinations.get('/:id', async (c) => {
   
   if (!result) return c.json({ error: 'Not found' }, 404);
   
+  const vac = result;
+  const photoPaths = JSON.parse(vac.photos || '[]');
+  
   return c.json({
-    ...result,
-    photos: JSON.parse(result.photos || '[]')
+    ...vac,
+    photos: photoPaths.map(p => `/api/vaccinations/photos/${p}`)
   });
 });
 
@@ -94,13 +100,14 @@ vaccinations.post('/:id/photos', async (c) => {
   const fileName = `vaccinations/${crypto.randomUUID()}-${file.name}`;
   await b2.uploadFile(c.env, fileName, await file.arrayBuffer(), file.type);
 
-  let photos = JSON.parse(vac.photos || '[]');
-  photos.push(fileName);
+  const photos = JSON.parse(vac.photos || '[]');
+  const fullPhotos = photos.map(p => `/api/vaccinations/photos/${p}`);
+  fullPhotos.push(`/api/vaccinations/photos/${fileName}`);
 
   await c.env.DB.prepare('UPDATE vaccinations SET photos = ?, updated_at = datetime(\'now\') WHERE id = ?')
-    .bind(JSON.stringify(photos), id).run();
+    .bind(JSON.stringify([...photos, fileName]), id).run();
 
-  return c.json({ photos, added: fileName });
+  return c.json({ photos: fullPhotos, added: `/api/vaccinations/photos/${fileName}` });
 });
 
 // DELETE /api/vaccinations/:id
@@ -117,6 +124,26 @@ vaccinations.delete('/:id', async (c) => {
 
   await c.env.DB.prepare('DELETE FROM vaccinations WHERE id = ?').bind(id).run();
   return c.json({ message: 'Deleted' });
+});
+
+// GET /api/vaccinations/photos/*
+// Служит для отдачи фото через стриминг (избегаем CORS на B2)
+vaccinations.get('/photos/*', async (c) => {
+  let path = c.req.path.replace('/api/vaccinations/photos/', '');
+  // Санитизация пути
+  path = path.replace(/\.\.\//g, '');
+  try {
+    const url = await b2.getDownloadUrl(c.env, path);
+    const res = await fetch(url);
+    if (!res.ok) return c.json({ error: 'Photo not found' }, 404);
+
+    return c.body(res.body, 200, {
+      'Content-Type': res.headers.get('Content-Type') || 'image/jpeg',
+      'Cache-Control': 'public, max-age=86400', // Кэшируем фото на сутки
+    });
+  } catch (e) {
+    return c.json({ error: 'Storage error' }, 500);
+  }
 });
 
 export default vaccinations;
