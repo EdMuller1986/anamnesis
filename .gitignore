@@ -54,3 +54,4 @@ npm-debug.log*
 Расшифровки/
 ответы.txt
 backend/src/services/external-controller.js
+GEMINI.md

@@ -82,8 +82,8 @@ Simply push to `master`. The GitHub Actions workflow will:
 Anamnesis works with any LLM that can talk to HTTP APIs. The coordinator reads your medical documents and maintains the structured database.
 
 **Supported Tools for AI:**
-- **[Gemini CLI](docs/setup/gemini-cli.md)** (Google) - Highly recommended for this fork.
 - **[Claude Code](docs/setup/claude-code.md)** (Anthropic).
+- **[Gemini CLI](docs/setup/gemini-cli.md)** (Google).
 - **[Cursor IDE](docs/setup/cursor.md)** / **[Aider](docs/setup/aider.md)**.
 
 See [`AI_COORDINATOR_GUIDE.md`](AI_COORDINATOR_GUIDE.md) for detailed tool definitions.
@@ -92,9 +92,7 @@ See [`AI_COORDINATOR_GUIDE.md`](AI_COORDINATOR_GUIDE.md) for detailed tool defin
 
 ## 🛡️ Quality Assurance
 
-We use a **Double-Verify Protocol**:
-1. **Automated Tests**: Every deploy runs a full integration cycle (Empty -> Populate Demo -> Verify Report -> Wipe -> Restore).
-2. **External Controller**: Critical changes (Auth, Security, Infrastructure) are peer-reviewed by an independent GPT-4o model before being pushed to master.
+We use automated tests to ensure stability: every deploy runs a full integration cycle (Empty -> Populate Demo -> Verify Report -> Wipe -> Restore).
 
 ---
 
@@ -109,7 +107,6 @@ We use a **Double-Verify Protocol**:
 - **Original repository**: https://github.com/Veta-one/anamnesis
 - **Original author's article**: [Habr](https://habr.com/ru/articles/1022450/)
 - **Migration Roadmap**: [`docs/MIGRATION_PLAN.md`](docs/MIGRATION_PLAN.md)
-- **Security Protocol**: [`GEMINI.md`](GEMINI.md)
 
 ---
 

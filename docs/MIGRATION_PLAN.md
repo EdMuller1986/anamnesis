@@ -119,7 +119,6 @@ This document tracks the migration of Anamnesis from a traditional VPS setup to 
 - [x] GitHub Actions → Cloudflare Workers + Pages
 - [x] Automatic secret injection during build
 - [x] **New**: Functional validation of secrets (B2 Auth, Telegram API, Crypto logic)
-- [x] **New**: "External Controller" protocol (GPT-4o review before critical pushes)
 
 ### Disaster Recovery
 - [x] Automated restore from B2 backup: `/api/admin/tools/restore-from-backup`
@@ -163,7 +162,6 @@ This document tracks the migration of Anamnesis from a traditional VPS setup to 
 ### Maintenance
 - Backups run at **02:00 UTC** daily.
 - Reminders check every **15 minutes**.
-- All critical changes must be reviewed by the **External Controller** (see `GEMINI.md`).
 
 ---
 
