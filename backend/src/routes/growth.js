@@ -14,7 +14,10 @@ growth.get('/', async (c) => {
 // GET /api/growth/:id
 growth.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const result = await c.env.DB.prepare('SELECT * FROM growth_log WHERE id = ?').bind(id).first();
+  const patientId = c.get('patientId');
+  const result = await c.env.DB.prepare(
+    'SELECT * FROM growth_log WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).first();
   if (!result) return c.json({ error: 'Not found' }, 404);
   return c.json(result);
 });
@@ -39,15 +42,16 @@ growth.post('/', async (c) => {
 // PUT /api/growth/:id
 growth.put('/:id', async (c) => {
   const id = c.req.param('id');
+  const patientId = c.get('patientId');
   const body = await c.req.json();
   const { measured_at, height_cm, weight_kg, head_circumference_cm, notes } = body;
 
   const { results } = await c.env.DB.prepare(`
     UPDATE growth_log
     SET measured_at = ?, height_cm = ?, weight_kg = ?, head_circumference_cm = ?, notes = ?
-    WHERE id = ?
+    WHERE id = ? AND patient_id = ?
     RETURNING *
-  `).bind(measured_at, height_cm, weight_kg, head_circumference_cm, notes, id).all();
+  `).bind(measured_at, height_cm, weight_kg, head_circumference_cm, notes, id, patientId).all();
 
   if (results.length === 0) return c.json({ error: 'Not found' }, 404);
   return c.json(results[0]);
@@ -56,7 +60,10 @@ growth.put('/:id', async (c) => {
 // DELETE /api/growth/:id
 growth.delete('/:id', async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM growth_log WHERE id = ?').bind(id).run();
+  const patientId = c.get('patientId');
+  await c.env.DB.prepare(
+    'DELETE FROM growth_log WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).run();
   return c.json({ message: 'Deleted' });
 });
 

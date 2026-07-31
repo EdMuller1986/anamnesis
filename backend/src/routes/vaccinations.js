@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import * as b2 from '../services/b2-storage';
+import { validateUpload, MAX_PHOTO_BYTES } from '../services/upload-policy';
 
 const vaccinations = new Hono();
 
@@ -29,10 +30,56 @@ vaccinations.get('/', async (c) => {
   return c.json(parsedResults);
 });
 
+// GET /api/vaccinations/photos/*  (before /:id so it is not captured as id)
+// Stream photo only if the B2 key belongs to a vaccination of the active patient.
+vaccinations.get('/photos/*', async (c) => {
+  const patientId = c.get('patientId');
+  let path = c.req.path.replace('/api/vaccinations/photos/', '');
+  path = path.replace(/\.\.\//g, '');
+
+  if (!path || path.includes('..')) {
+    return c.json({ error: 'Invalid path' }, 400);
+  }
+
+  // Ownership: key must appear in photos JSON of a vaccination for this patient
+  const { results } = await c.env.DB.prepare(
+    'SELECT photos FROM vaccinations WHERE patient_id = ?'
+  ).bind(patientId).all();
+
+  const owned = (results || []).some((row) => {
+    try {
+      const photos = JSON.parse(row.photos || '[]');
+      return Array.isArray(photos) && photos.includes(path);
+    } catch {
+      return false;
+    }
+  });
+
+  if (!owned) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+
+  try {
+    const url = await b2.getDownloadUrl(c.env, path);
+    const res = await fetch(url);
+    if (!res.ok) return c.json({ error: 'Photo not found' }, 404);
+
+    return c.body(res.body, 200, {
+      'Content-Type': res.headers.get('Content-Type') || 'image/jpeg',
+      'Cache-Control': 'private, no-store',
+    });
+  } catch (e) {
+    return c.json({ error: 'Storage error' }, 500);
+  }
+});
+
 // GET /api/vaccinations/:id
 vaccinations.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const result = await c.env.DB.prepare('SELECT * FROM vaccinations WHERE id = ?').bind(id).first();
+  const patientId = c.get('patientId');
+  const result = await c.env.DB.prepare(
+    'SELECT * FROM vaccinations WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).first();
   
   if (!result) return c.json({ error: 'Not found' }, 404);
   
@@ -66,6 +113,7 @@ vaccinations.post('/', async (c) => {
 // PUT /api/vaccinations/:id
 vaccinations.put('/:id', async (c) => {
   const id = c.req.param('id');
+  const patientId = c.get('patientId');
   const body = await c.req.json();
   const { name, vaccine_name, dose_number, scheduled_date, actual_date, status, administered_by, batch_number, reaction, notes } = body;
 
@@ -74,9 +122,9 @@ vaccinations.put('/:id', async (c) => {
     SET name = ?, vaccine_name = ?, dose_number = ?, scheduled_date = ?,
         actual_date = ?, status = ?, administered_by = ?, batch_number = ?,
         reaction = ?, notes = ?, updated_at = datetime('now')
-    WHERE id = ?
+    WHERE id = ? AND patient_id = ?
     RETURNING *
-  `).bind(name, vaccine_name, dose_number, scheduled_date, actual_date, status, administered_by, batch_number, reaction, notes, id).all();
+  `).bind(name, vaccine_name, dose_number, scheduled_date, actual_date, status, administered_by, batch_number, reaction, notes, id, patientId).all();
 
   if (results.length === 0) return c.json({ error: 'Not found' }, 404);
   
@@ -87,6 +135,7 @@ vaccinations.put('/:id', async (c) => {
 // POST /api/vaccinations/:id/photos
 vaccinations.post('/:id/photos', async (c) => {
   const id = c.req.param('id');
+  const patientId = c.get('patientId');
   const body = await c.req.parseBody();
   const file = body.photo;
 
@@ -94,18 +143,26 @@ vaccinations.post('/:id/photos', async (c) => {
     return c.json({ error: 'Photo is required' }, 400);
   }
 
-  const vac = await c.env.DB.prepare('SELECT photos FROM vaccinations WHERE id = ?').bind(id).first();
+  const check = validateUpload(file, { maxBytes: MAX_PHOTO_BYTES, photoOnly: true });
+  if (!check.ok) {
+    return c.json({ error: check.error }, check.status);
+  }
+
+  const vac = await c.env.DB.prepare(
+    'SELECT photos FROM vaccinations WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).first();
   if (!vac) return c.json({ error: 'Not found' }, 404);
 
-  const fileName = `vaccinations/${crypto.randomUUID()}-${file.name}`;
-  await b2.uploadFile(c.env, fileName, await file.arrayBuffer(), file.type);
+  const fileName = `vaccinations/${crypto.randomUUID()}.${check.extension}`;
+  await b2.uploadFile(c.env, fileName, await file.arrayBuffer(), check.mime);
 
   const photos = JSON.parse(vac.photos || '[]');
   const fullPhotos = photos.map(p => `/api/vaccinations/photos/${p}`);
   fullPhotos.push(`/api/vaccinations/photos/${fileName}`);
 
-  await c.env.DB.prepare('UPDATE vaccinations SET photos = ?, updated_at = datetime(\'now\') WHERE id = ?')
-    .bind(JSON.stringify([...photos, fileName]), id).run();
+  await c.env.DB.prepare(
+    'UPDATE vaccinations SET photos = ?, updated_at = datetime(\'now\') WHERE id = ? AND patient_id = ?'
+  ).bind(JSON.stringify([...photos, fileName]), id, patientId).run();
 
   return c.json({ photos: fullPhotos, added: `/api/vaccinations/photos/${fileName}` });
 });
@@ -113,37 +170,22 @@ vaccinations.post('/:id/photos', async (c) => {
 // DELETE /api/vaccinations/:id
 vaccinations.delete('/:id', async (c) => {
   const id = c.req.param('id');
-  const vac = await c.env.DB.prepare('SELECT photos FROM vaccinations WHERE id = ?').bind(id).first();
+  const patientId = c.get('patientId');
+  const vac = await c.env.DB.prepare(
+    'SELECT photos FROM vaccinations WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).first();
   
-  if (vac) {
-    const photos = JSON.parse(vac.photos || '[]');
-    for (const photoPath of photos) {
-      try { await b2.deleteFile(c.env, photoPath); } catch (e) {}
-    }
+  if (!vac) return c.json({ error: 'Not found' }, 404);
+
+  const photos = JSON.parse(vac.photos || '[]');
+  for (const photoPath of photos) {
+    try { await b2.deleteFile(c.env, photoPath); } catch (e) {}
   }
 
-  await c.env.DB.prepare('DELETE FROM vaccinations WHERE id = ?').bind(id).run();
+  await c.env.DB.prepare(
+    'DELETE FROM vaccinations WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).run();
   return c.json({ message: 'Deleted' });
-});
-
-// GET /api/vaccinations/photos/*
-// Служит для отдачи фото через стриминг (избегаем CORS на B2)
-vaccinations.get('/photos/*', async (c) => {
-  let path = c.req.path.replace('/api/vaccinations/photos/', '');
-  // Санитизация пути
-  path = path.replace(/\.\.\//g, '');
-  try {
-    const url = await b2.getDownloadUrl(c.env, path);
-    const res = await fetch(url);
-    if (!res.ok) return c.json({ error: 'Photo not found' }, 404);
-
-    return c.body(res.body, 200, {
-      'Content-Type': res.headers.get('Content-Type') || 'image/jpeg',
-      'Cache-Control': 'public, max-age=86400', // Кэшируем фото на сутки
-    });
-  } catch (e) {
-    return c.json({ error: 'Storage error' }, 500);
-  }
 });
 
 export default vaccinations;

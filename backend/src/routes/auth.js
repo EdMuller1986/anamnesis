@@ -33,8 +33,19 @@ auth.post('/login', async (c) => {
     const lockout = await authSession.checkLockout(db, ip, deviceId);
     if (lockout.locked) return c.json({ error: 'Too many attempts', remaining_sec: Math.ceil(lockout.remainingMs / 1000) }, 429);
     
-    const storedHash = await db.prepare('SELECT value FROM app_settings WHERE key = ?').bind(`pin_hash_${patientId}`).first('value');
-    if (!storedHash) return c.json({ error: 'PIN not configured' }, 500);
+    let storedHash = await db.prepare('SELECT value FROM app_settings WHERE key = ?').bind(`pin_hash_${patientId}`).first('value');
+
+    // Bootstrap: seed PIN hash from APP_PIN secret/env on first login (fresh install)
+    if (!storedHash) {
+      const appPin = c.env.APP_PIN;
+      if (appPin) {
+        storedHash = await authSession.hashPin(String(appPin));
+        await db.prepare('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)')
+          .bind(`pin_hash_${patientId}`, storedHash).run();
+      } else {
+        return c.json({ error: 'PIN not configured' }, 500);
+      }
+    }
     
     if (!(await authSession.verifyPin(pin, storedHash))) {
       const fail = await authSession.recordAuthFailure(db, ip, deviceId, patientId);
@@ -100,17 +111,37 @@ auth.post('/verify-device', async (c) => {
 
   const { patientId, deviceId } = challengeData;
 
+  const lockout = await authSession.checkLockout(db, ip, deviceId);
+  if (lockout.locked) {
+    return c.json({ error: 'Too many attempts', remaining_sec: Math.ceil(lockout.remainingMs / 1000) }, 429);
+  }
+
+  // Do not re-trust a revoked device via control-word path
+  if (deviceId && await authSession.isDeviceRevoked(db, deviceId, patientId)) {
+    await db.prepare('DELETE FROM app_settings WHERE key = ?').bind(`auth_challenge_${challenge_token}`).run();
+    return c.json({ error: 'Это устройство было отозвано владельцем', device_revoked: true }, 403);
+  }
+
   const storedHash = await db.prepare('SELECT value FROM app_settings WHERE key = ?')
     .bind(`security_answer_hash_${patientId}`).first('value');
 
   if (!storedHash || !(await authSession.verifyValue(answer.trim().toLowerCase(), storedHash))) {
-    return c.json({ error: 'Неверное контрольное слово' }, 401);
+    const fail = await authSession.recordAuthFailure(db, ip, deviceId, patientId);
+    // Invalidate challenge so answer cannot be brute-forced for 5 minutes without re-login
+    await db.prepare('DELETE FROM app_settings WHERE key = ?').bind(`auth_challenge_${challenge_token}`).run();
+    return c.json({
+      error: 'Неверное контрольное слово',
+      attempts: fail.attempts,
+      challenge_invalidated: true,
+    }, 401);
   }
 
   // Успех! Создаем сессию и помечаем устройство как доверенное
   await db.prepare('DELETE FROM app_settings WHERE key = ?').bind(`auth_challenge_${challenge_token}`).run();
+  await authSession.resetAuthFailures(db, ip, deviceId);
   
   if (deviceId) {
+    // Explicit trust path: set revoked = 0 only after correct security answer (device was never revoked, or was new)
     await db.prepare(`
       INSERT INTO known_devices (device_id, patient_id, label, last_ip, user_agent, last_seen_at, revoked)
       VALUES (?, ?, ?, ?, ?, datetime('now'), 0)

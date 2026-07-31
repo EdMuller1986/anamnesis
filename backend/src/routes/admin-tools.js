@@ -198,37 +198,16 @@ adminTools.post('/backup-now', async (c) => {
 });
 
 // POST /api/admin/tools/restore-from-backup
+// DISABLED (P0): previous implementation could wipe patient data then import nothing
+// (backup wrapper under state.data vs import top-level arrays; c.app.fetch; incomplete tables).
+// Re-enable only after a full backup/restore rewrite + round-trip tests on real D1.
 adminTools.post('/restore-from-backup', async (c) => {
-  const pid = c.get('patientId') || 1;
-  try {
-    // 1. Получаем данные из последнего бэкапа в B2
-    const state = await backup.restoreFromLatest(c.env);
-    
-    // 2. Вызываем логику импорта (эмулируем запрос к /api/admin/import)
-    // Но так как мы внутри кода, мы просто подготовим такой же batch
-    // Для этого нам нужно передать управление эндпоинту или вынести логику.
-    // Чтобы не дублировать сложный код импорта, мы сделаем "внутренний fetch"
-    const importUrl = new URL('/api/admin/import', c.req.url).toString();
-    const res = await c.app.fetch(new Request(importUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Admin-Token': c.req.header('X-Admin-Token') || ''
-      },
-      body: JSON.stringify({ ...state, wipe: true })
-    }), c.env);
-
-    const result = await res.json();
-    return c.json({ 
-      ok: res.ok, 
-      message: 'Auto-restore completed', 
-      import_details: result 
-    }, res.status);
-
-  } catch (err) {
-    console.error('[AutoRestore] Failed:', err);
-    return c.json({ error: 'Auto-restore failed: ' + err.message }, 500);
-  }
+  return c.json({
+    error: 'Restore is disabled',
+    reason:
+      'Unsafe restore path (wipe + incomplete/mismatched import). Disabled until backup/restore is rewritten and tested.',
+    status: 'disabled',
+  }, 503);
 });
 
 export default adminTools;

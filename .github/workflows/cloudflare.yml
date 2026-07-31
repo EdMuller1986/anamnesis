@@ -16,11 +16,7 @@ on:
         required: false
         default: 'true'
         type: boolean
-      auto_restore:
-        description: 'Auto-restore from B2 backup after deploy (WIPES DATA)'
-        required: false
-        default: 'false'
-        type: boolean
+      # auto_restore removed (P0): restore endpoint is disabled until rewritten safely
 
 jobs:
   validate-secrets:
@@ -154,16 +150,12 @@ jobs:
           database_name = "anamnesis-db"
           database_id = "${{ secrets.D1_DATABASE_ID }}"
 
+          # Non-secret config only. Sensitive values must be Worker Secrets (see next step).
           [vars]
           CORS_ORIGINS = "${{ secrets.CORS_ORIGINS }}"
           B2_ENDPOINT = "${{ secrets.B2_ENDPOINT }}"
           B2_BUCKET_NAME = "${{ secrets.B2_BUCKET_NAME }}"
           B2_KEY_ID = "${{ secrets.B2_KEY_ID }}"
-          B2_APPLICATION_KEY = "${{ secrets.B2_APPLICATION_KEY }}"
-          ADMIN_TOKEN = "${{ secrets.ADMIN_TOKEN }}"
-          BACKUP_ENCRYPTION_KEY = "${{ secrets.BACKUP_ENCRYPTION_KEY }}"
-          TELEGRAM_BOT_TOKEN = "${{ secrets.TELEGRAM_BOT_TOKEN }}"
-          TELEGRAM_CHAT_ID = "${{ secrets.TELEGRAM_CHAT_ID }}"
           WEBAUTHN_RP_ID = "anamnesis-frontend.pages.dev"
           WEBAUTHN_ORIGIN = "https://anamnesis-frontend.pages.dev"
           WEBAUTHN_RP_NAME = "Anamnesis"
@@ -193,24 +185,35 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Trigger Auto-Restore (Optional)
-        if: ${{ github.event.inputs.auto_restore == 'true' }}
-        run: |
-          # Give it a few seconds for the new version to settle
-          sleep 10
-          echo "Triggering automated restoration from B2..."
-          # Note: We use the deployed URL or relative path if possible. 
-          # Here we'll use the secret VITE_API_URL or try to infer it.
-          # For reliability, we'll try to find the worker URL via wrangler.
-          WORKER_URL=$(npx wrangler@3 whoami | grep -o 'https://[^ ]*\.workers\.dev' | head -1)
-          if [ -z "$WORKER_URL" ]; then WORKER_URL="${{ secrets.VITE_API_URL }}"; fi
-          
-          curl -f -X POST "${WORKER_URL}/admin/tools/restore-from-backup" \
-            -H "X-Admin-Token: ${{ secrets.ADMIN_TOKEN }}"
+      # Worker Secrets (not plaintext [vars]). Persist across deploys; re-push keeps them in sync with GitHub secrets.
+      - name: Sync Worker Secrets
         working-directory: backend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          put_secret() {
+            local name="$1"
+            local value="$2"
+            if [ -z "$value" ]; then
+              echo "::error::Missing value for Worker secret $name"
+              exit 1
+            fi
+            printf '%s' "$value" | npx wrangler@3 secret put "$name"
+            echo "✅ Secret $name synced"
+          }
+          put_secret "B2_APPLICATION_KEY" "${{ secrets.B2_APPLICATION_KEY }}"
+          put_secret "ADMIN_TOKEN" "${{ secrets.ADMIN_TOKEN }}"
+          put_secret "BACKUP_ENCRYPTION_KEY" "${{ secrets.BACKUP_ENCRYPTION_KEY }}"
+          put_secret "TELEGRAM_BOT_TOKEN" "${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          put_secret "TELEGRAM_CHAT_ID" "${{ secrets.TELEGRAM_CHAT_ID }}"
+          # Optional: only sync APP_PIN if the GitHub secret is configured
+          if [ -n "${{ secrets.APP_PIN }}" ]; then
+            put_secret "APP_PIN" "${{ secrets.APP_PIN }}"
+          else
+            echo "ℹ️ APP_PIN GitHub secret not set — skip (login needs existing pin_hash or secret)"
+          fi
 
   deploy-frontend:
     runs-on: ubuntu-latest

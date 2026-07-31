@@ -53,19 +53,33 @@ https://anamnesis-backend.simulyakrge.workers.dev/api
 
 ---
 
-## Step 3: Set B2 Secret in Cloudflare (One-Time)
+## Step 3: Worker Secrets (sensitive values)
 
-GitHub Actions **cannot** set Cloudflare Workers secrets (they're write-only).
-You need to set it **once manually**:
+Sensitive values must **not** live in wrangler `[vars]` (they would be plain text in the Worker config).
+
+CI deploys with non-secret `[vars]` only, then runs `wrangler secret put` for:
+
+- `B2_APPLICATION_KEY`
+- `ADMIN_TOKEN`
+- `BACKUP_ENCRYPTION_KEY`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+
+Those must exist as **GitHub Actions secrets** (same names). After the first successful deploy+sync they also appear under Workers → Settings → Secrets.
+
+Manual one-time / local setup:
 
 ```bash
 cd backend
 wrangler login  # If not logged in
 wrangler secret put B2_APPLICATION_KEY --config wrangler.toml.local
-# Paste your B2 application key when prompted
+wrangler secret put ADMIN_TOKEN --config wrangler.toml.local
+wrangler secret put BACKUP_ENCRYPTION_KEY --config wrangler.toml.local
+wrangler secret put TELEGRAM_BOT_TOKEN --config wrangler.toml.local
+wrangler secret put TELEGRAM_CHAT_ID --config wrangler.toml.local
 ```
 
-This secret is stored in Cloudflare Workers and persists across deployments.
+**Note:** Auto-restore after deploy is **removed**. The restore API returns `503` until backup/restore is safely rewritten.
 
 ---
 

@@ -18,6 +18,12 @@ const mockDB = {
            if (token === 'valid-token') return Promise.resolve({ patient_id: 1, expires_at: '2099-01-01' });
            return Promise.resolve(null);
         }
+        // Auth middleware: SELECT id FROM patient WHERE id = ?
+        if (query.includes('FROM patient') && query.includes('WHERE id')) {
+          const id = args[0];
+          if (id === 1 || id === '1') return Promise.resolve({ id: 1 });
+          return Promise.resolve(null);
+        }
         if (query.includes('documents')) {
           return Promise.resolve({ id: 1, file_path: 'test.pdf', title: 'Test', mime_type: 'application/pdf', patient_id: 1 });
         }

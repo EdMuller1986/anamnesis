@@ -16,7 +16,7 @@
 
 > AI-coordinated medical records tracker — a personal health PWA where an AI assistant does the heavy lifting of data entry, structuring, and cross-referencing, while you just scan documents and talk to it in plain language.
 
-**Status**: ✅ Migration Completed. Production-ready on Cloudflare Stack.
+**Status**: ⚠️ Dev prototype on Cloudflare (Workers + D1 + B2). **Not production-ready** — P0 security hardening in progress. Do not use with real medical data until isolation, auth, upload, and backup/restore are fixed (see `TODO.md`).
 
 ## 🆓 Free Serverless Architecture
 
@@ -39,9 +39,9 @@ This is a complete reimplementation of [Veta-one/anamnesis](https://github.com/V
   - Multi-destination backup (Telegram + Backblaze B2).
   - Two-phase authentication with device trust and security questions.
   - WebAuthn (FaceID/TouchID) support out of the box.
-- 🛠️ **Disaster Recovery**:
-  - Automated state restoration from B2 storage via GitHub Action or API.
-  - Hash-based deduplication to save storage and bandwidth.
+- 🛠️ **Backups (partial)**:
+  - Daily encrypted JSON backup to Telegram + B2 (restore endpoint currently **disabled** until rewritten safely).
+  - Hash-based deduplication (known issues; see `TODO.md`).
 - 📱 **PWA Excellence**:
   - Full client-side PDF rendering (no backend poppler/pdftoppm dependency).
   - Native-like performance via Cloudflare Edge network.

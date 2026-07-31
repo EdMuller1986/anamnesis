@@ -54,7 +54,10 @@ timeline.get('/', async (c) => {
 // GET /api/timeline/:id
 timeline.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const result = await c.env.DB.prepare('SELECT * FROM timeline WHERE id = ?').bind(id).first();
+  const patientId = c.get('patientId');
+  const result = await c.env.DB.prepare(
+    'SELECT * FROM timeline WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).first();
   if (!result) return c.json({ error: 'Not found' }, 404);
   return c.json(result);
 });
@@ -88,6 +91,7 @@ timeline.post('/', async (c) => {
 // PUT /api/timeline/:id
 timeline.put('/:id', async (c) => {
   const id = c.req.param('id');
+  const patientId = c.get('patientId');
   const body = await c.req.json();
   const { 
     title, description, category, event_date, notes, 
@@ -101,12 +105,12 @@ timeline.put('/:id', async (c) => {
         event_date = ?, notes = ?, specialist_name = ?,
         specialist_type = ?, specialist_id = ?,
         transcription = ?, ai_assessment = ?, updated_at = datetime('now')
-    WHERE id = ?
+    WHERE id = ? AND patient_id = ?
     RETURNING *
   `).bind(
     title, description, category, event_date, notes,
     specialist_name, specialist_type, specialist_id,
-    transcription, ai_assessment, id
+    transcription, ai_assessment, id, patientId
   ).all();
 
   if (results.length === 0) return c.json({ error: 'Not found' }, 404);

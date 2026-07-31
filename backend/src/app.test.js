@@ -76,6 +76,17 @@ describe('Anamnesis API Integration Tests', () => {
     expect(res.status).toBe(403);
   });
 
+  it('POST /api/admin/tools/restore-from-backup is disabled (503)', async () => {
+    const res = await app.fetch(new Request('http://localhost/api/admin/tools/restore-from-backup', {
+      method: 'POST',
+      headers: { 'X-Admin-Token': 'test-admin-token' }
+    }), mockEnv);
+    expect(res.status).toBe(503);
+    const data = await res.json();
+    expect(data.status).toBe('disabled');
+    expect(data.error).toMatch(/disabled/i);
+  });
+
   it('GET /api/admin/tools returns 200 with valid admin token', async () => {
     const res = await app.fetch(new Request('http://localhost/api/admin/tools', {
       headers: { 'X-Admin-Token': 'test-admin-token' }
@@ -93,7 +104,10 @@ describe('Anamnesis API Integration Tests', () => {
           bind: (...args) => ({
             first: () => {
               if (q.includes('sessions')) return Promise.resolve({ patient_id: 1, expires_at: '2099-01-01' });
-              return Promise.resolve({ id: 1, file_path: 'test.pdf', title: 'Test', mime_type: 'application/pdf' });
+              if (q.includes('FROM patient') && q.includes('WHERE id')) {
+                return Promise.resolve({ id: 1 });
+              }
+              return Promise.resolve({ id: 1, file_path: 'test.pdf', title: 'Test', mime_type: 'application/pdf', patient_id: 1 });
             },
             run: () => Promise.resolve({ success: true })
           })

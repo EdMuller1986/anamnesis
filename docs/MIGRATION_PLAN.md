@@ -1,14 +1,16 @@
-# Migration Plan: VPS → Serverless (COMPLETED)
+# Migration Plan: VPS → Serverless (IN PROGRESS — NOT PRODUCTION-READY)
 
 This document tracks the migration of Anamnesis from a traditional VPS setup to free serverless infrastructure (Cloudflare Workers + D1 + Backblaze B2).
 
+> **Honest status (2026-07):** Architectural port to Hono/D1/B2 exists, but **feature parity, security isolation, backup/restore, and data migration are incomplete**. See root `TODO.md`. Do not treat checklist items below as verified production truth.
+
 ## 🎯 Goals
 
-1. **Zero monthly cost** for typical single-family usage (✅ Achieved)
-2. **Feature parity** with original implementation (✅ Achieved)
-3. **Maintain security** (encryption, authentication, session management) (✅ Achieved)
-4. **Preserve AI coordinator protocol** (HTTP API compatibility) (✅ Achieved)
-5. **Git-based deployment** (push to deploy via GitHub Actions) (✅ Achieved)
+1. **Zero monthly cost** for typical single-family usage (partially achieved for free-tier stack)
+2. **Feature parity** with original implementation (❌ incomplete — see TODO.md)
+3. **Maintain security** (encryption, authentication, session management) (⚠️ regressions — P0 hardening in progress)
+4. **Preserve AI coordinator protocol** (HTTP API compatibility) (partial)
+5. **Git-based deployment** (push to deploy via GitHub Actions) (✅ CI deploys Worker/Pages; D1 migrations not applied automatically)
 
 ---
 
@@ -121,7 +123,7 @@ This document tracks the migration of Anamnesis from a traditional VPS setup to 
 - [x] **New**: Functional validation of secrets (B2 Auth, Telegram API, Crypto logic)
 
 ### Disaster Recovery
-- [x] Automated restore from B2 backup: `/api/admin/tools/restore-from-backup`
+- [ ] Automated restore from B2 backup: **DISABLED** (`/api/admin/tools/restore-from-backup` returns 503 until rewrite)
 - [x] Manual "Full Restore" option in GitHub Action workflow (Wipe & Restore)
 
 ---
@@ -137,17 +139,17 @@ This document tracks the migration of Anamnesis from a traditional VPS setup to 
 
 ---
 
-## 📊 Migration Progress Summary
+## 📊 Migration Progress Summary (revised)
 
-| Phase | Status | Progress | Estimated Time | Actual Time |
-|-------|--------|----------|---------------|-------------|
-| 1. Core Backend | ✅ Completed | 100% | 5 days | 3 days |
-| 2. Auth & Sessions | ✅ Completed | 100% | 4 days | 2 days |
-| 3. Admin Tools & AI | ✅ Completed | 100% | 7 days | 3 days |
-| 4. Frontend & Dash | ✅ Completed | 100% | 10 days | 4 days |
-| 5. Deploy & Restore | ✅ Completed | 100% | 5 days | 2 days |
-| 6. Testing & QA | ✅ Completed | 100% | 7 days | 4 days |
-| **Total** | | **100%** | **38 days** | **18 days** |
+| Phase | Status | Progress | Notes |
+|-------|--------|----------|-------|
+| 1. Core Backend | ⚠️ Partial | ~70% | Hono routes exist; schema/API gaps remain |
+| 2. Auth & Sessions | ⚠️ Partial | ~50% | PIN/session work; WebAuthn revoke, expiry, multi-patient bugs |
+| 3. Admin Tools & AI | ⚠️ Partial | ~40% | Integrity/AI review stubbed; restore **disabled** |
+| 4. Frontend & Dash | ⚠️ Partial | ~60% | UI calls missing endpoints |
+| 5. Deploy & Restore | ⚠️ Partial | ~40% | Deploy works; no auto D1 migrations; restore off |
+| 6. Testing & QA | ❌ Incomplete | ~20% | Many mocks; no real backup→wipe→restore cycle |
+| **Total** | **Not production-ready** | **~40–50%** | Track work in TODO.md / P0 plan |
 
 ---
 

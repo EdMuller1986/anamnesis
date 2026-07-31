@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import * as b2 from '../services/b2-storage';
+import { validateUpload, fileResponseHeaders } from '../services/upload-policy';
 
 const documents = new Hono();
 
@@ -27,11 +28,7 @@ documents.get('/:id/file', async (c) => {
     if (!res.ok) throw new Error(`B2 storage responded with ${res.status}`);
 
     const fileName = doc.title || doc.original_name || 'document';
-    return c.body(res.body, 200, {
-      'Content-Type': doc.mime_type || 'application/octet-stream',
-      'Content-Disposition': `inline; filename="${encodeURIComponent(fileName)}"`,
-      'Cache-Control': 'public, max-age=3600',
-    });
+    return c.body(res.body, 200, fileResponseHeaders(doc.mime_type, fileName));
   } catch (e) {
     console.error('[Documents] Download error:', e);
     return c.json({ error: 'Storage error', message: e.message }, 500);
@@ -48,28 +45,39 @@ documents.post('/', async (c) => {
     return c.json({ error: 'File is required' }, 400);
   }
 
+  const check = validateUpload(file);
+  if (!check.ok) {
+    return c.json({ error: check.error }, check.status);
+  }
+
   const title = body.title || file.name;
   const category = body.category || 'report';
   const notes = body.notes || '';
   const timelineId = body.timeline_id || null;
   
-  // Clean filename for storage (only UUID + extension)
-  const extension = file.name.split('.').pop() || 'bin';
-  const fileName = `${crypto.randomUUID()}.${extension}`;
+  // Clean filename for storage (only UUID + safe extension)
+  const fileName = `${crypto.randomUUID()}.${check.extension}`;
   
   try {
-    // Save to B2
-    await b2.uploadFile(c.env, fileName, await file.arrayBuffer(), file.type);
+    const buffer = await file.arrayBuffer();
+    if (buffer.byteLength > 50 * 1024 * 1024) {
+      return c.json({ error: 'File too large (max 50 MB)' }, 413);
+    }
+
+    // Save to B2 with canonical MIME from policy (not raw client type)
+    await b2.uploadFile(c.env, fileName, buffer, check.mime);
 
     // Save to D1
     const { results } = await c.env.DB.prepare(
       `INSERT INTO documents (title, category, file_path, mime_type, notes, timeline_id, patient_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        RETURNING *`
-    ).bind(title, category, fileName, file.type, notes, timelineId, patientId).all();
+    ).bind(title, category, fileName, check.mime, notes, timelineId, patientId).all();
 
     return c.json(results[0], 201);
   } catch (e) {
+    // Best-effort cleanup if D1 insert fails after B2 upload
+    try { await b2.deleteFile(c.env, fileName); } catch (_) { /* ignore */ }
     console.error('S3 Upload Error:', e);
     return c.json({ error: 'Upload failed', message: e.message, code: e.code }, 500);
   }

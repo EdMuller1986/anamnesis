@@ -71,14 +71,16 @@ export const verifyPin = verifyValue;
 
 export async function createSession(db, patientId, ip, ua, deviceId) {
   const token = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-  const expiresAt = new Date(Date.now() + SESSION_MS).toISOString();
 
+  // Store expires_at via SQLite datetime so comparisons with datetime('now') are consistent
+  // (JS toISOString() uses "T" and "Z", which break lexicographic compare with datetime('now')).
   await db.prepare(
     `INSERT INTO sessions (token, patient_id, device_id, expires_at, ip, user_agent)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(token, patientId, deviceId, expiresAt, ip, ua).run();
+     VALUES (?, ?, ?, datetime('now', '+${SESSION_MAX_AGE_DAYS} days'), ?, ?)`
+  ).bind(token, patientId, deviceId, ip, ua).run();
 
-  // Также обновляем/создаем запись в known_devices
+  // Touch known_devices without un-revoking. New devices start as not revoked;
+  // revoked devices must stay revoked (WebAuthn/PIN paths check before calling createSession).
   if (deviceId) {
     await db.prepare(`
       INSERT INTO known_devices (device_id, patient_id, last_ip, user_agent, last_seen_at, revoked)
@@ -86,8 +88,7 @@ export async function createSession(db, patientId, ip, ua, deviceId) {
       ON CONFLICT(device_id, patient_id) DO UPDATE SET
         last_ip = excluded.last_ip,
         user_agent = excluded.user_agent,
-        last_seen_at = excluded.last_seen_at,
-        revoked = 0
+        last_seen_at = excluded.last_seen_at
     `).bind(deviceId, patientId, ip, ua).run();
   }
 
@@ -95,9 +96,22 @@ export async function createSession(db, patientId, ip, ua, deviceId) {
 }
 
 export async function getSession(db, token) {
+  // datetime() normalizes both ISO and SQLite formats for comparison
   return await db.prepare(
-    'SELECT * FROM sessions WHERE token = ? AND revoked = 0 AND expires_at > datetime("now")'
+    `SELECT * FROM sessions
+     WHERE token = ? AND revoked = 0 AND datetime(expires_at) > datetime('now')`
   ).bind(token).first();
+}
+
+/**
+ * Returns true if device is known and revoked for this patient.
+ */
+export async function isDeviceRevoked(db, deviceId, patientId) {
+  if (!deviceId) return false;
+  const row = await db.prepare(
+    'SELECT revoked FROM known_devices WHERE device_id = ? AND patient_id = ?'
+  ).bind(deviceId, patientId).first();
+  return !!(row && row.revoked);
 }
 
 export async function touchSession(db, token, ip) {

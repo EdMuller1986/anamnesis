@@ -59,9 +59,23 @@ function calcAge(dob) {
 }
 
 // GET /api/export/pdf
+// Default: patientId from auth middleware (X-Patient-Id / session).
+// Optional query patient_id: allowed for window.open (cannot send headers); only if
+// the patient row exists (family multi-patient — any authenticated session may open any chart).
 exportRoute.get('/pdf', async (c) => {
-  const pid = parseInt(c.req.query('patient_id') || '1', 10);
   const db = c.env.DB;
+  let pid = c.get('patientId');
+  const queryPid = c.req.query('patient_id');
+  if (queryPid != null && String(queryPid).trim() !== '') {
+    const parsed = parseInt(queryPid, 10);
+    if (isNaN(parsed) || parsed <= 0) {
+      return c.json({ error: 'Invalid patient_id' }, 400);
+    }
+    const row = await db.prepare('SELECT id FROM patient WHERE id = ?').bind(parsed).first();
+    if (!row) return c.text('Patient not found', 404);
+    pid = parsed;
+  }
+  if (!pid) return c.json({ error: 'Patient context required' }, 400);
 
   try {
     const [
@@ -187,7 +201,7 @@ exportRoute.get('/pdf', async (c) => {
         <tbody>
         ${specialists.results.map(s => `
             <tr>
-                <td style="width: 25%"><strong>${esc(s.name)}</strong></td>
+                <td style="width: 25%"><strong>${esc(s.full_name || s.name)}</strong></td>
                 <td style="width: 20%">${esc(s.specialization)}</td>
                 <td style="width: 15%">${esc(s.status) === 'active' ? 'На связи' : 'Архив'}</td>
                 <td>${esc(s.notes)}</td>

@@ -49,7 +49,9 @@ comments.post('/', async (c) => {
 
 comments.delete('/:id', async (c) => {
   const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM comments WHERE id = ?').bind(id).run();
+  const patientId = c.get('patientId');
+  await c.env.DB.prepare('DELETE FROM comments WHERE id = ? AND patient_id = ?')
+    .bind(id, patientId).run();
   return c.json({ message: 'Deleted' });
 });
 

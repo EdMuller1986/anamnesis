@@ -109,6 +109,7 @@ export function Sidebar() {
     const session = getSession();
     const token = session.sessionToken ?? '';
     const pid = session.patientId ?? 1;
+    // Relative /api works via Pages _redirects; patient_id required (window.open cannot send X-Patient-Id).
     window.open(
       `/api/export/pdf?token=${encodeURIComponent(token)}&patient_id=${pid}`,
       '_blank'

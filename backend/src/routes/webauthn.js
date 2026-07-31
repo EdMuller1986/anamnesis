@@ -220,6 +220,12 @@ webauthn.post('/login/verify', async (c) => {
       return c.json({ error: 'Верификация не прошла' }, 401);
     }
 
+    // Revoked devices must not regain access via passkey (and createSession must not clear revoke)
+    if (await authSession.isDeviceRevoked(db, deviceId, credentialRow.patient_id)) {
+      await deleteChallenge(db, `auth_${deviceId}`);
+      return c.json({ error: 'Это устройство было отозвано владельцем', device_revoked: true }, 403);
+    }
+
     await db.prepare(
       "UPDATE webauthn_credentials SET counter = ?, last_used_at = datetime('now') WHERE credential_id = ?"
     ).bind(verification.authenticationInfo.newCounter, credentialRow.credential_id).run();

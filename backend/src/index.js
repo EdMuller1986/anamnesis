@@ -68,17 +68,42 @@ app.onError((err, c) => {
  * Гарантирует наличие базовых полей и корректность типов.
  */
 const getMeta = (c) => {
-  const patientIdRaw = c.req.header('x-patient-id') || '1';
-  let patientId = parseInt(patientIdRaw, 10);
-  if (isNaN(patientId) || patientId <= 0) patientId = 1;
-
   return {
     ip: c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || '0.0.0.0',
     ua: c.req.header('user-agent') || 'unknown',
     deviceId: c.req.header('x-device-id') || null,
-    patientId
   };
 };
+
+/**
+ * Resolve active chart (family multi-patient).
+ * Session = authenticated family user; X-Patient-Id = which chart to use.
+ * If header is absent, fall back to session.patient_id (login default) or 1.
+ * Invalid header → 400; unknown patient → 404.
+ */
+async function resolvePatientId(c, { fallbackPatientId = 1, requireExists = true } = {}) {
+  const headerRaw = c.req.header('x-patient-id');
+  let patientId;
+
+  if (headerRaw != null && String(headerRaw).trim() !== '') {
+    patientId = parseInt(headerRaw, 10);
+    if (isNaN(patientId) || patientId <= 0) {
+      return { error: c.json({ error: 'Invalid X-Patient-Id' }, 400) };
+    }
+  } else {
+    patientId = parseInt(fallbackPatientId, 10);
+    if (isNaN(patientId) || patientId <= 0) patientId = 1;
+  }
+
+  if (requireExists && c.env.DB) {
+    const row = await c.env.DB.prepare('SELECT id FROM patient WHERE id = ?').bind(patientId).first();
+    if (!row) {
+      return { error: c.json({ error: 'Patient not found' }, 404) };
+    }
+  }
+
+  return { patientId };
+}
 
 /**
  * Middleware авторизации.
@@ -98,7 +123,7 @@ const authMiddleware = async (c, next) => {
 
   if (publicPaths.has(path)) return await next();
 
-  // 2. Исключения по префиксу
+  // 2. Исключения по префиксу (admin sets patientId in its own middleware)
   if (path.startsWith('/api/webauthn/login/') || path.startsWith('/api/admin/')) {
     return await next();
   }
@@ -126,7 +151,14 @@ const authMiddleware = async (c, next) => {
     await authSession.touchSession(c.env.DB, token, meta.ip);
   }
 
-  c.set('patientId', session.patient_id);
+  // Family mode: honor X-Patient-Id (active chart), not only session.patient_id from login
+  const resolved = await resolvePatientId(c, {
+    fallbackPatientId: session.patient_id || 1,
+    requireExists: true,
+  });
+  if (resolved.error) return resolved.error;
+
+  c.set('patientId', resolved.patientId);
   c.set('session', session);
   await next();
 };
@@ -136,6 +168,7 @@ app.use('/api/*', authMiddleware);
 /**
  * Middleware для админ-инструментов.
  * Защищает операционные ручки ИИ-координатора.
+ * Also resolves X-Patient-Id so admin tools are not stuck on patient 1.
  */
 app.use('/api/admin/*', async (c, next) => {
   const adminToken = c.req.header('X-Admin-Token');
@@ -145,6 +178,15 @@ app.use('/api/admin/*', async (c, next) => {
     console.warn(`Admin access denied from ${c.req.header('cf-connecting-ip')}`);
     return c.json({ error: 'Forbidden: Invalid Admin Token' }, 403);
   }
+
+  // Admin may omit patient existence check for tools that wipe empty DBs; still parse header.
+  const resolved = await resolvePatientId(c, {
+    fallbackPatientId: 1,
+    requireExists: false,
+  });
+  if (resolved.error) return resolved.error;
+  c.set('patientId', resolved.patientId);
+
   await next();
 });
 

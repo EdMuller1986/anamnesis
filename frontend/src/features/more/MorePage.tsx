@@ -80,8 +80,9 @@ export function MorePage() {
       const session = getSession();
       const token = session.sessionToken ?? '';
       const pid = session.patientId ?? 1;
-      const baseUrl = import.meta.env.VITE_API_URL || '/api';
-      window.open(`${baseUrl}/api/export/pdf?token=${encodeURIComponent(token)}&patient_id=${pid}`, '_blank');
+      // VITE_API_URL already includes /api (e.g. https://worker.../api); avoid /api/api/...
+      const baseUrl = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
+      window.open(`${baseUrl}/export/pdf?token=${encodeURIComponent(token)}&patient_id=${pid}`, '_blank');
       return;
     }
     navigate(item.target);
