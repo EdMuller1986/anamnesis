@@ -115,8 +115,13 @@ export async function isDeviceRevoked(db, deviceId, patientId) {
 }
 
 export async function touchSession(db, token, ip) {
+  // Sliding expiration: extend expires_at on activity (matches MIGRATION_PLAN claim)
   await db.prepare(
-    'UPDATE sessions SET last_seen_at = datetime("now"), ip = ? WHERE token = ?'
+    `UPDATE sessions
+     SET last_seen_at = datetime('now'),
+         ip = ?,
+         expires_at = datetime('now', '+${SESSION_MAX_AGE_DAYS} days')
+     WHERE token = ? AND revoked = 0`
   ).bind(ip, token).run();
 }
 

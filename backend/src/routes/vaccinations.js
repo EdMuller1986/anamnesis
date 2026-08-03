@@ -4,6 +4,30 @@ import { validateUpload, MAX_PHOTO_BYTES } from '../services/upload-policy';
 
 const vaccinations = new Hono();
 
+// GET /api/vaccinations/section-photos — FE endpoint (legacy section gallery)
+vaccinations.get('/section-photos', async (c) => {
+  const patientId = c.get('patientId');
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, name, photos FROM vaccinations WHERE patient_id = ? AND photos IS NOT NULL AND photos != ?'
+  ).bind(patientId, '[]').all();
+
+  const photos = [];
+  for (const row of results || []) {
+    try {
+      const paths = JSON.parse(row.photos || '[]');
+      for (const p of paths) {
+        photos.push({
+          vaccination_id: row.id,
+          name: row.name,
+          url: `/api/vaccinations/photos/${p}`,
+          path: p,
+        });
+      }
+    } catch { /* skip */ }
+  }
+  return c.json(photos);
+});
+
 // GET /api/vaccinations
 vaccinations.get('/', async (c) => {
   const patientId = c.get('patientId');

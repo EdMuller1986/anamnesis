@@ -146,7 +146,7 @@ This document tracks the migration of Anamnesis from a traditional VPS setup to 
 | 1. Core Backend | ⚠️ Partial | ~70% | Hono routes exist; schema/API gaps remain |
 | 2. Auth & Sessions | ⚠️ Partial | ~50% | PIN/session work; WebAuthn revoke, expiry, multi-patient bugs |
 | 3. Admin Tools & AI | ⚠️ Partial | ~40% | Integrity/AI review stubbed; restore **disabled** |
-| 4. Frontend & Dash | ⚠️ Partial | ~60% | UI calls missing endpoints |
+| 4. Frontend & Dash | ⚠️ Partial | ~75% | P2: schema fields + CRUD parity improved; dual-name cleanup still open |
 | 5. Deploy & Restore | ⚠️ Partial | ~40% | Deploy works; no auto D1 migrations; restore off |
 | 6. Testing & QA | ❌ Incomplete | ~20% | Many mocks; no real backup→wipe→restore cycle |
 | **Total** | **Not production-ready** | **~40–50%** | Track work in TODO.md / P0 plan |

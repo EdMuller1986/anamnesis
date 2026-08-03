@@ -80,16 +80,25 @@ export default defineConfig(({ mode }) => {
                 !url.pathname.includes('/export/'),
               handler: 'NetworkFirst',
               options: {
-                cacheName: 'api-cache-v2',
+                // v3: patient-scoped cache keys (family multi-patient)
+                cacheName: 'api-cache-v3',
                 networkTimeoutSeconds: 3,
                 expiration: {
                   maxEntries: 200,
-                  maxAgeSeconds: 60 * 60 * 24 * 7,
+                  // Shorter TTL — medical data should not stick offline for a week
+                  maxAgeSeconds: 60 * 60,
                 },
                 // ТОЛЬКО 200 — не кэшируем opaque/errors (статус 0).
-                // Раньше из-за [0, 200] при первом провальном запросе
-                // сохранялся пустой blob.
                 cacheableResponse: { statuses: [200] },
+                // Include X-Patient-Id in cache key so patient A/B responses never mix
+                plugins: [
+                  {
+                    cacheKeyWillBeUsed: async ({ request }) => {
+                      const pid = request.headers.get('X-Patient-Id') || '0';
+                      return `${request.url}::patient=${pid}`;
+                    },
+                  },
+                ],
               },
             },
             // /uploads/* НЕ в runtimeCaching — браузер запрашивает их

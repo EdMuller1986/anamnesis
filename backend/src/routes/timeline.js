@@ -69,20 +69,23 @@ timeline.post('/', async (c) => {
   const { 
     title, description, category, event_date, notes, 
     specialist_name, specialist_type, specialist_id,
-    transcription, ai_assessment 
+    transcription, ai_assessment,
+    severity, badge_text, badge_color,
   } = body;
 
   const { results } = await c.env.DB.prepare(`
     INSERT INTO timeline (
       title, description, category, event_date, notes, 
       specialist_name, specialist_type, specialist_id, 
-      transcription, ai_assessment, patient_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      transcription, ai_assessment, severity, badge_text, badge_color, patient_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `).bind(
     title, description, category || 'visit', event_date, notes,
     specialist_name, specialist_type, specialist_id, 
-    transcription, ai_assessment, patientId
+    transcription, ai_assessment,
+    severity || null, badge_text || null, badge_color || null,
+    patientId
   ).all();
 
   return c.json(results[0], 201);
@@ -96,7 +99,8 @@ timeline.put('/:id', async (c) => {
   const { 
     title, description, category, event_date, notes, 
     specialist_name, specialist_type, specialist_id,
-    transcription, ai_assessment 
+    transcription, ai_assessment,
+    severity, badge_text, badge_color,
   } = body;
 
   const { results } = await c.env.DB.prepare(`
@@ -104,13 +108,17 @@ timeline.put('/:id', async (c) => {
     SET title = ?, description = ?, category = ?,
         event_date = ?, notes = ?, specialist_name = ?,
         specialist_type = ?, specialist_id = ?,
-        transcription = ?, ai_assessment = ?, updated_at = datetime('now')
+        transcription = ?, ai_assessment = ?,
+        severity = ?, badge_text = ?, badge_color = ?,
+        updated_at = datetime('now')
     WHERE id = ? AND patient_id = ?
     RETURNING *
   `).bind(
     title, description, category, event_date, notes,
     specialist_name, specialist_type, specialist_id,
-    transcription, ai_assessment, id, patientId
+    transcription, ai_assessment,
+    severity ?? null, badge_text ?? null, badge_color ?? null,
+    id, patientId
   ).all();
 
   if (results.length === 0) return c.json({ error: 'Not found' }, 404);

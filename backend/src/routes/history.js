@@ -3,14 +3,23 @@ import { renderHistory } from '../services/changelog';
 
 const history = new Hono();
 
-// GET /api/history
+// GET /api/history?limit=&offset=&since=
 history.get('/', async (c) => {
   const pid = c.get('patientId');
-  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
-  
-  const { results } = await c.env.DB.prepare(
-    'SELECT * FROM audit_log WHERE patient_id = ? ORDER BY id DESC LIMIT ?'
-  ).bind(pid, limit).all();
+  const limit = Math.min(parseInt(c.req.query('limit') || '50', 10) || 50, 200);
+  const offset = Math.max(parseInt(c.req.query('offset') || '0', 10) || 0, 0);
+  const since = c.req.query('since');
+
+  let query = 'SELECT * FROM audit_log WHERE patient_id = ?';
+  const params = [pid];
+  if (since) {
+    query += ' AND created_at >= ?';
+    params.push(since);
+  }
+  query += ' ORDER BY id DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+
+  const { results } = await c.env.DB.prepare(query).bind(...params).all();
 
   const rendered = await renderHistory(results);
   return c.json(rendered);

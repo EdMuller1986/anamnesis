@@ -13,6 +13,19 @@ documents.get('/', async (c) => {
   return c.json(results);
 });
 
+// GET /api/documents/:id — metadata (before /:id/file is fine; Hono matches longer paths)
+documents.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  // Avoid capturing "file" as id when route order is wrong
+  if (id === 'file') return c.json({ error: 'Not found' }, 404);
+  const patientId = c.get('patientId');
+  const doc = await c.env.DB.prepare(
+    'SELECT * FROM documents WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).first();
+  if (!doc) return c.json({ error: 'Not found' }, 404);
+  return c.json(doc);
+});
+
 // GET /api/documents/:id/file
 documents.get('/:id/file', async (c) => {
   const id = c.req.param('id');
@@ -67,12 +80,22 @@ documents.post('/', async (c) => {
     // Save to B2 with canonical MIME from policy (not raw client type)
     await b2.uploadFile(c.env, fileName, buffer, check.mime);
 
-    // Save to D1
+    // Save to D1 (original_name / file_size for FE)
     const { results } = await c.env.DB.prepare(
-      `INSERT INTO documents (title, category, file_path, mime_type, notes, timeline_id, patient_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO documents (title, category, file_path, mime_type, notes, timeline_id, patient_id, original_name, file_size)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING *`
-    ).bind(title, category, fileName, check.mime, notes, timelineId, patientId).all();
+    ).bind(
+      title,
+      category,
+      fileName,
+      check.mime,
+      notes,
+      timelineId,
+      patientId,
+      file.name || null,
+      buffer.byteLength
+    ).all();
 
     return c.json(results[0], 201);
   } catch (e) {
@@ -81,6 +104,41 @@ documents.post('/', async (c) => {
     console.error('S3 Upload Error:', e);
     return c.json({ error: 'Upload failed', message: e.message, code: e.code }, 500);
   }
+});
+
+// PUT /api/documents/:id — metadata only
+documents.put('/:id', async (c) => {
+  const id = c.req.param('id');
+  const patientId = c.get('patientId');
+  const body = await c.req.json();
+
+  const existing = await c.env.DB.prepare(
+    'SELECT * FROM documents WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).first();
+  if (!existing) return c.json({ error: 'Not found' }, 404);
+
+  const title = body.title !== undefined ? body.title : existing.title;
+  const category = body.category !== undefined ? body.category : existing.category;
+  const notes = body.notes !== undefined ? body.notes : existing.notes;
+  const description = body.description !== undefined ? body.description : existing.description;
+  const timeline_id = body.timeline_id !== undefined ? body.timeline_id : existing.timeline_id;
+  const document_date = body.document_date !== undefined ? body.document_date : existing.document_date;
+  const source_doctor = body.source_doctor !== undefined ? body.source_doctor : existing.source_doctor;
+  const source_org = body.source_org !== undefined ? body.source_org : existing.source_org;
+
+  const { results } = await c.env.DB.prepare(`
+    UPDATE documents
+    SET title = ?, category = ?, notes = ?, description = ?, timeline_id = ?,
+        document_date = ?, source_doctor = ?, source_org = ?, updated_at = datetime('now')
+    WHERE id = ? AND patient_id = ?
+    RETURNING *
+  `).bind(
+    title, category, notes, description, timeline_id,
+    document_date, source_doctor, source_org, id, patientId
+  ).all();
+
+  if (!results.length) return c.json({ error: 'Not found' }, 404);
+  return c.json(results[0]);
 });
 
 // DELETE /api/documents/:id

@@ -36,6 +36,24 @@ growth.post('/', async (c) => {
     RETURNING *
   `).bind(measured_at, height_cm, weight_kg, head_circumference_cm, notes, patientId).all();
 
+  // Keep patient profile in sync with latest measurement (upstream behavior)
+  if (height_cm != null || weight_kg != null) {
+    const sets = ["updated_at = datetime('now')"];
+    const vals = [];
+    if (height_cm != null) {
+      sets.push('current_height_cm = ?');
+      vals.push(height_cm);
+    }
+    if (weight_kg != null) {
+      sets.push('current_weight_kg = ?');
+      vals.push(weight_kg);
+    }
+    vals.push(patientId);
+    await c.env.DB.prepare(
+      `UPDATE patient SET ${sets.join(', ')} WHERE id = ?`
+    ).bind(...vals).run();
+  }
+
   return c.json(results[0], 201);
 });
 

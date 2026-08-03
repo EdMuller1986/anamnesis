@@ -28,15 +28,24 @@ diagnoses.get('/:id', async (c) => {
 diagnoses.post('/', async (c) => {
   const patientId = c.get('patientId');
   const body = await c.req.json();
-  const { name, icd_code, status, detail } = body;
+  const { name, icd_code, status, detail, diagnosed_date, source, notes } = body;
 
   if (!name) return c.json({ error: 'Name is required' }, 400);
 
   const { results } = await c.env.DB.prepare(`
-    INSERT INTO diagnoses (name, icd_code, status, detail, patient_id)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO diagnoses (name, icd_code, status, detail, diagnosed_date, source, notes, patient_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
-  `).bind(name, icd_code, status || 'active', detail, patientId).all();
+  `).bind(
+    name,
+    icd_code || null,
+    status || 'active',
+    detail || null,
+    diagnosed_date || null,
+    source || null,
+    notes || null,
+    patientId
+  ).all();
 
   return c.json(results[0], 201);
 });
@@ -45,14 +54,27 @@ diagnoses.put('/:id', async (c) => {
   const id = c.req.param('id');
   const patientId = c.get('patientId');
   const body = await c.req.json();
-  const { name, icd_code, status, detail } = body;
+
+  const existing = await c.env.DB.prepare(
+    'SELECT * FROM diagnoses WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).first();
+  if (!existing) return c.json({ error: 'Not found' }, 404);
+
+  const name = body.name !== undefined ? body.name : existing.name;
+  const icd_code = body.icd_code !== undefined ? body.icd_code : existing.icd_code;
+  const status = body.status !== undefined ? body.status : existing.status;
+  const detail = body.detail !== undefined ? body.detail : existing.detail;
+  const diagnosed_date = body.diagnosed_date !== undefined ? body.diagnosed_date : existing.diagnosed_date;
+  const source = body.source !== undefined ? body.source : existing.source;
+  const notes = body.notes !== undefined ? body.notes : existing.notes;
 
   const { results } = await c.env.DB.prepare(`
     UPDATE diagnoses
-    SET name = ?, icd_code = ?, status = ?, detail = ?
+    SET name = ?, icd_code = ?, status = ?, detail = ?, diagnosed_date = ?, source = ?, notes = ?,
+        updated_at = datetime('now')
     WHERE id = ? AND patient_id = ?
     RETURNING *
-  `).bind(name, icd_code, status, detail, id, patientId).all();
+  `).bind(name, icd_code, status, detail, diagnosed_date, source, notes, id, patientId).all();
 
   if (results.length === 0) return c.json({ error: 'Not found' }, 404);
   return c.json(results[0]);
