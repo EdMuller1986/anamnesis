@@ -37,13 +37,12 @@ ALTER TABLE medical_errors ADD COLUMN action_text TEXT;
 ALTER TABLE medical_errors ADD COLUMN specialist_id INTEGER;
 ALTER TABLE medical_errors ADD COLUMN notes TEXT;
 
--- Reminders
+-- Reminders (updated_at already added in 0002 — do not re-add)
 ALTER TABLE reminders ADD COLUMN message TEXT;
 ALTER TABLE reminders ADD COLUMN recurring TEXT;
 ALTER TABLE reminders ADD COLUMN repeat_cron TEXT;
 ALTER TABLE reminders ADD COLUMN sent_at TEXT;
 ALTER TABLE reminders ADD COLUMN notes TEXT;
-ALTER TABLE reminders ADD COLUMN updated_at TEXT;
 
 -- Patient extras (upstream parity, optional)
 ALTER TABLE patient ADD COLUMN blood_type TEXT;
