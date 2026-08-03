@@ -4,7 +4,8 @@ const search = new Hono();
 
 /**
  * GET /api/search?q=текст
- * Поиск по всем разделам медкарты.
+ * Returns a flat array of hits with `_type` (frontend SearchModal expects this).
+ * FTS failures fall back to LIKE-only so search still works.
  */
 search.get('/', async (c) => {
   const q = (c.req.query('q') || '').trim();
@@ -15,31 +16,60 @@ search.get('/', async (c) => {
   }
 
   const like = `%${q}%`;
-  const ftsQuery = q.replace(/"/g, '""') + '*'; // Добавляем * для префиксного поиска
+  // FTS5: escape quotes; prefix search
+  const ftsQuery = `"${q.replace(/"/g, '""')}"*`;
   const results = [];
+  const seen = new Set();
+
+  const pushUnique = (rows) => {
+    for (const r of rows || []) {
+      const key = `${r._type}:${r.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push(r);
+    }
+  };
 
   try {
-    // 1. Поиск по справочникам и результатам (LIKE)
     const queries = [
-      { sql: "SELECT id, name as title, 'diagnosis' as _type FROM diagnoses WHERE patient_id = ? AND (name LIKE ? OR icd_code LIKE ? OR detail LIKE ?) LIMIT 5", params: [pid, like, like, like] },
-      { sql: "SELECT id, full_name as title, 'specialist' as _type FROM specialists WHERE patient_id = ? AND (full_name LIKE ? OR specialization LIKE ? OR clinic LIKE ?) LIMIT 5", params: [pid, like, like, like] },
-      { sql: "SELECT id, name as title, 'medication' as _type FROM medications WHERE patient_id = ? AND (name LIKE ? OR dosage LIKE ? OR detail LIKE ?) LIMIT 5", params: [pid, like, like, like] },
-      { sql: "SELECT id, name as title, 'vaccination' as _type FROM vaccinations WHERE patient_id = ? AND (name LIKE ? OR vaccine_name LIKE ? OR notes LIKE ?) LIMIT 5", params: [pid, like, like, like] },
-      { sql: "SELECT id, parameter as title, 'lab_result' as _type FROM lab_results WHERE patient_id = ? AND (parameter LIKE ? OR test_name LIKE ? OR notes LIKE ?) LIMIT 5", params: [pid, like, like, like] }
+      { sql: "SELECT id, name as title, 'diagnosis' as _type FROM diagnoses WHERE patient_id = ? AND (name LIKE ? OR icd_code LIKE ? OR detail LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like, like] },
+      { sql: "SELECT id, full_name as title, 'specialist' as _type FROM specialists WHERE patient_id = ? AND (full_name LIKE ? OR specialization LIKE ? OR clinic LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, name as title, 'medication' as _type FROM medications WHERE patient_id = ? AND (name LIKE ? OR dosage LIKE ? OR detail LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, name as title, 'vaccination' as _type FROM vaccinations WHERE patient_id = ? AND (name LIKE ? OR vaccine_name LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, parameter as title, 'lab_result' as _type FROM lab_results WHERE patient_id = ? AND (parameter LIKE ? OR test_name LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, title, 'plan' as _type FROM plan WHERE patient_id = ? AND (title LIKE ? OR detail LIKE ? OR description LIKE ?) LIMIT 5", params: [pid, like, like, like] },
+      { sql: "SELECT id, title, 'timeline' as _type FROM timeline WHERE patient_id = ? AND (title LIKE ? OR description LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, title, 'document' as _type FROM documents WHERE patient_id = ? AND (title LIKE ? OR original_name LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
     ];
 
     for (const qry of queries) {
-      const { results: res } = await c.env.DB.prepare(qry.sql).bind(...qry.params).all();
-      if (res) results.push(...res);
+      try {
+        const { results: res } = await c.env.DB.prepare(qry.sql).bind(...qry.params).all();
+        pushUnique(res);
+      } catch (e) {
+        // column may not exist yet on partially migrated DB — skip that query
+        console.warn('[search] query skipped:', e.message);
+      }
     }
 
-    // 2. Поиск по контенту (FTS5) - дублируем LIKE, чтобы работало надежнее
-    const fts = await Promise.all([
-      c.env.DB.prepare(`SELECT t.id, t.title, 'timeline' as _type FROM timeline_fts JOIN timeline t ON t.id = timeline_fts.rowid WHERE timeline_fts MATCH ? AND t.patient_id = ? LIMIT 5`).bind(ftsQuery, pid).all(),
-      c.env.DB.prepare(`SELECT d.id, d.title, 'document' as _type FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid WHERE documents_fts MATCH ? AND d.patient_id = ? LIMIT 5`).bind(ftsQuery, pid).all()
-    ]);
-    
-    fts.forEach(f => { if (f.results) results.push(...f.results); });
+    // FTS optional enrichment
+    try {
+      const fts = await Promise.all([
+        c.env.DB.prepare(
+          `SELECT t.id, t.title, 'timeline' as _type FROM timeline_fts
+           JOIN timeline t ON t.id = timeline_fts.rowid
+           WHERE timeline_fts MATCH ? AND t.patient_id = ? LIMIT 8`
+        ).bind(ftsQuery, pid).all(),
+        c.env.DB.prepare(
+          `SELECT d.id, d.title, 'document' as _type FROM documents_fts
+           JOIN documents d ON d.id = documents_fts.rowid
+           WHERE documents_fts MATCH ? AND d.patient_id = ? LIMIT 8`
+        ).bind(ftsQuery, pid).all(),
+      ]);
+      fts.forEach((f) => pushUnique(f.results));
+    } catch (e) {
+      console.warn('[search] FTS unavailable:', e.message);
+    }
 
     return c.json(results);
   } catch (err) {

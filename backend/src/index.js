@@ -45,14 +45,31 @@ app.use('*', cors({
       console.warn('CORS_ORIGINS not set, rejecting request from:', origin);
       return null;
     }
-    return allowed === '*' ? origin : allowed.split(',');
+    // Hono expects a single origin string (or null), not an array
+    if (allowed === '*') {
+      // With credentials, reflect request Origin (or allow none for non-browser)
+      return origin || '*';
+    }
+    const list = allowed.split(',').map((s) => s.trim()).filter(Boolean);
+    if (!origin) return list[0] || null;
+    return list.includes(origin) ? origin : null;
   },
   credentials: true,
+  allowHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Session-Token',
+    'X-Patient-Id',
+    'X-Device-Id',
+    'X-Admin-Token',
+  ],
+  exposeHeaders: ['Content-Disposition'],
 }));
 
 app.use('*', secureHeaders({
-  contentSecurityPolicy: false, // Отключаем CSP в Workers, так как он может конфликтовать с фронтендом на другом домене
-  xFrameOptions: false,
+  // API Worker: no framing; CSP left loose so FE on Pages can call us
+  contentSecurityPolicy: false,
+  xFrameOptions: 'DENY',
   permissionsPolicy: {
     'publickey-credentials-get': ['*'],
     'publickey-credentials-create': ['*'],
@@ -61,7 +78,12 @@ app.use('*', secureHeaders({
 
 app.onError((err, c) => {
   console.error(`Worker Error: ${err.message}`, err.stack);
-  return c.json({ error: 'Internal Server Error', message: err.message }, 500);
+  // Avoid leaking internal details to clients by default
+  const expose = c.env?.EXPOSE_ERROR_DETAILS === 'true' || c.env?.EXPOSE_ERROR_DETAILS === true;
+  return c.json({
+    error: 'Internal Server Error',
+    ...(expose ? { message: err.message } : {}),
+  }, 500);
 });
 
 /**

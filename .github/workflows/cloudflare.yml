@@ -60,13 +60,13 @@ jobs:
       - name: Functional Check - Cloudflare & D1
         run: |
           echo "Verifying Cloudflare Token and Account..."
-          if ! npx wrangler@3 whoami; then
+          if ! npx wrangler@4 whoami; then
             echo "::error::Cloudflare Token or Account ID is invalid."
             exit 1
           fi
 
           echo "Checking D1 Database Access..."
-          DB_INFO=$(npx wrangler@3 d1 list --json)
+          DB_INFO=$(npx wrangler@4 d1 list --json)
           if [ $? -ne 0 ]; then
             echo "::error::Failed to list D1 databases."
             echo "$DB_INFO"
@@ -179,14 +179,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
       - name: Apply D1 migrations (remote)
-        run: npx wrangler@3 d1 migrations apply anamnesis-db --remote
+        run: npx wrangler@4 d1 migrations apply anamnesis-db --remote
         working-directory: backend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Deploy Worker
-        run: npx wrangler@3 deploy
+        run: npx wrangler@4 deploy
         working-directory: backend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -207,7 +207,7 @@ jobs:
               echo "::error::Missing value for Worker secret $name"
               exit 1
             fi
-            printf '%s' "$value" | npx wrangler@3 secret put "$name"
+            printf '%s' "$value" | npx wrangler@4 secret put "$name"
             echo "✅ Secret $name synced"
           }
           put_secret "B2_APPLICATION_KEY" "${{ secrets.B2_APPLICATION_KEY }}"
@@ -257,7 +257,7 @@ jobs:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
       - name: Deploy to Cloudflare Pages
-        run: npx wrangler@3 pages deploy dist --project-name=anamnesis-frontend
+        run: npx wrangler@4 pages deploy dist --project-name=anamnesis-frontend
         working-directory: frontend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

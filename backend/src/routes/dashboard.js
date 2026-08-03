@@ -1,4 +1,10 @@
 import { Hono } from 'hono';
+import {
+  normalizePatient,
+  mapPlanItem,
+  mapMedicationRow,
+  mapErrorRow,
+} from '../services/patient-normalize';
 
 const dashboard = new Hono();
 
@@ -12,8 +18,19 @@ dashboard.get('/', async (c) => {
   const queries = {
     patient: c.env.DB.prepare('SELECT * FROM patient WHERE id = ?').bind(pid).first(),
     diagnoses: c.env.DB.prepare("SELECT * FROM diagnoses WHERE patient_id = ? AND status = 'active' ORDER BY created_at DESC").bind(pid).all(),
-    medications: c.env.DB.prepare("SELECT * FROM medications WHERE patient_id = ? AND status = 'active' ORDER BY created_at DESC").bind(pid).all(),
-    specialists: c.env.DB.prepare("SELECT * FROM specialists WHERE patient_id = ? AND status = 'active' ORDER BY created_at DESC").bind(pid).all(),
+    medications: c.env.DB.prepare(`
+      SELECT m.*, s.full_name as specialist_name_resolved
+      FROM medications m
+      LEFT JOIN specialists s ON m.specialist_id = s.id
+      WHERE m.patient_id = ? AND m.status = 'active'
+      ORDER BY m.created_at DESC
+    `).bind(pid).all(),
+    // status may be NULL on older rows — treat as active
+    specialists: c.env.DB.prepare(`
+      SELECT * FROM specialists
+      WHERE patient_id = ? AND (status = 'active' OR status IS NULL OR status = '')
+      ORDER BY created_at DESC
+    `).bind(pid).all(),
     reminders: c.env.DB.prepare("SELECT * FROM reminders WHERE patient_id = ? AND status = 'pending' ORDER BY remind_at ASC LIMIT 10").bind(pid).all(),
     plan: c.env.DB.prepare("SELECT * FROM plan WHERE patient_id = ? AND status IN ('pending', 'in_progress') AND priority IN ('urgent', 'high') ORDER BY created_at DESC LIMIT 10").bind(pid).all(),
     errors: c.env.DB.prepare("SELECT * FROM medical_errors WHERE patient_id = ? AND status = 'open' ORDER BY created_at DESC").bind(pid).all(),
@@ -34,36 +51,42 @@ dashboard.get('/', async (c) => {
       data[key] = results[i];
     });
 
+    const diags = data.diagnoses?.results || [];
+    const meds = (data.medications?.results || []).map(mapMedicationRow);
+    const specs = data.specialists?.results || [];
+    const rems = data.reminders?.results || [];
+    const planItems = (data.plan?.results || []).map(mapPlanItem);
+    const errs = (data.errors?.results || []).map(mapErrorRow);
+
     return c.json({
-      patient: data.patient || null,
-      active_diagnoses: data.diagnoses.results,
-      active_medications: data.medications.results,
-      active_specialists: data.specialists.results,
-      upcoming_reminders: data.reminders.results,
-      urgent_plan_items: data.plan.results,
-      open_errors: data.errors.results,
-      upcoming_vaccinations: data.upcomingVaccinations.results,
+      patient: normalizePatient(data.patient),
+      active_diagnoses: diags,
+      active_medications: meds,
+      active_specialists: specs,
+      upcoming_reminders: rems,
+      urgent_plan_items: planItems,
+      open_errors: errs,
+      upcoming_vaccinations: data.upcomingVaccinations?.results || [],
       latest_growth: data.latestGrowth || null,
-      lab_anomalies: data.labAnomalies.results,
+      lab_anomalies: data.labAnomalies?.results || [],
       stats: {
         documents: data.docsCount?.count || 0,
         plan_total: data.planTotal?.count || 0,
         plan_done: data.planDone?.count || 0,
         errors_open: data.errorsOpen?.count || 0,
-        diagnoses: data.diagnoses.results.length,
-        specialists: data.specialists.results.length,
-        reminders: data.reminders.results.length,
+        diagnoses: diags.length,
+        specialists: specs.length,
+        reminders: rems.length,
       },
     });
   } catch (err) {
     console.error('Dashboard Error:', err);
-    throw err; // Проброс в глобальный обработчик (app.onError)
+    throw err;
   }
 });
 
 /**
  * GET /api/dashboard/ai-summary
- * Получить последнюю сгенерированную ИИ-сводку по состоянию здоровья.
  */
 dashboard.get('/ai-summary', async (c) => {
   const pid = c.get('patientId');
@@ -76,7 +99,6 @@ dashboard.get('/ai-summary', async (c) => {
 
 /**
  * PUT /api/dashboard/ai-summary
- * Обновить ИИ-сводку (вызывается ИИ-координатором после анализа).
  */
 dashboard.put('/ai-summary', async (c) => {
   const pid = c.get('patientId');
