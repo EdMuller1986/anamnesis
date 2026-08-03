@@ -32,6 +32,11 @@ auth.post('/login', async (c) => {
   try {
     const lockout = await authSession.checkLockout(db, ip, deviceId);
     if (lockout.locked) return c.json({ error: 'Too many attempts', remaining_sec: Math.ceil(lockout.remainingMs / 1000) }, 429);
+
+    if (!authSession.isValidPin(String(pin ?? ''))) {
+      await authSession.logAuthEvent(db, { patientId, event: 'login_invalid_format', ip, deviceId });
+      return c.json({ error: 'PIN must be 4–10 digits' }, 400);
+    }
     
     let storedHash = await db.prepare('SELECT value FROM app_settings WHERE key = ?').bind(`pin_hash_${patientId}`).first('value');
 
@@ -49,6 +54,7 @@ auth.post('/login', async (c) => {
     
     if (!(await authSession.verifyPin(pin, storedHash))) {
       const fail = await authSession.recordAuthFailure(db, ip, deviceId, patientId);
+      await authSession.logAuthEvent(db, { patientId, event: 'login_fail', ip, deviceId, detail: `attempts=${fail.attempts}` });
       return c.json({ error: 'Invalid PIN', attempts: fail.attempts }, 401);
     }
 
@@ -78,11 +84,13 @@ auth.post('/login', async (c) => {
       }
       
       if (knownDevice?.revoked) {
+        await authSession.logAuthEvent(db, { patientId, event: 'login_device_revoked', ip, deviceId });
         return c.json({ error: 'Это устройство было отозвано владельцем', device_revoked: true }, 403);
       }
     }
 
     const token = await authSession.createSession(db, patientId, ip, ua, deviceId);
+    await authSession.logAuthEvent(db, { patientId, event: 'login_ok', ip, deviceId });
     return c.json({ token, expires_days: 14 });
   } catch (err) {
     return c.json({ error: 'Login error', message: err.message }, 500);
@@ -129,6 +137,7 @@ auth.post('/verify-device', async (c) => {
     const fail = await authSession.recordAuthFailure(db, ip, deviceId, patientId);
     // Invalidate challenge so answer cannot be brute-forced for 5 minutes without re-login
     await db.prepare('DELETE FROM app_settings WHERE key = ?').bind(`auth_challenge_${challenge_token}`).run();
+    await authSession.logAuthEvent(db, { patientId, event: 'verify_device_fail', ip, deviceId, detail: `attempts=${fail.attempts}` });
     return c.json({
       error: 'Неверное контрольное слово',
       attempts: fail.attempts,
@@ -139,6 +148,7 @@ auth.post('/verify-device', async (c) => {
   // Успех! Создаем сессию и помечаем устройство как доверенное
   await db.prepare('DELETE FROM app_settings WHERE key = ?').bind(`auth_challenge_${challenge_token}`).run();
   await authSession.resetAuthFailures(db, ip, deviceId);
+  await authSession.logAuthEvent(db, { patientId, event: 'verify_device_ok', ip, deviceId });
   
   if (deviceId) {
     // Explicit trust path: set revoked = 0 only after correct security answer (device was never revoked, or was new)
@@ -224,11 +234,15 @@ auth.post('/change-pin', async (c) => {
   const { old_pin, new_pin } = await c.req.json();
 
   if (!old_pin || !new_pin) return c.json({ error: 'old_pin and new_pin are required' }, 400);
+  if (!authSession.isValidPin(String(new_pin))) {
+    return c.json({ error: 'New PIN must be 4–10 digits' }, 400);
+  }
 
   const storedHash = await db.prepare('SELECT value FROM app_settings WHERE key = ?')
     .bind(`pin_hash_${patientId}`).first('value');
   
   if (!storedHash || !(await authSession.verifyPin(old_pin, storedHash))) {
+    await authSession.logAuthEvent(db, { patientId, event: 'change_pin_fail' });
     return c.json({ error: 'Неверный текущий PIN' }, 401);
   }
 
@@ -237,6 +251,7 @@ auth.post('/change-pin', async (c) => {
     .bind(`pin_hash_${patientId}`, newHash).run();
 
   await authSession.revokeAllOtherSessions(db, patientId, currentToken);
+  await authSession.logAuthEvent(db, { patientId, event: 'change_pin_ok' });
 
   return c.json({ ok: true, token: currentToken });
 });

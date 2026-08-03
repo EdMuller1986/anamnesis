@@ -62,7 +62,49 @@ export async function verifyValue(value, stored) {
   );
 
   const actualHashHex = bytesToHex(new Uint8Array(hash));
-  return actualHashHex === hashHex;
+  return timingSafeEqualHex(actualHashHex, hashHex);
+}
+
+/**
+ * Constant-time hex string compare (avoids early-exit length leaks on equal length).
+ */
+export function timingSafeEqualHex(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const len = Math.max(a.length, b.length);
+  let mismatch = a.length === b.length ? 0 : 1;
+  for (let i = 0; i < len; i++) {
+    const ca = i < a.length ? a.charCodeAt(i) : 0;
+    const cb = i < b.length ? b.charCodeAt(i) : 0;
+    mismatch |= ca ^ cb;
+  }
+  return mismatch === 0;
+}
+
+/** PIN policy: 4–10 digits (upstream-compatible). */
+export function isValidPin(pin) {
+  return typeof pin === 'string' && /^\d{4,10}$/.test(pin);
+}
+
+/**
+ * Append auth audit event (best-effort; never throws to caller).
+ */
+export async function logAuthEvent(db, { patientId = null, event, ip = null, deviceId = null, detail = null } = {}) {
+  if (!db || !event) return;
+  try {
+    await db.prepare(
+      `INSERT INTO auth_log (patient_id, event, ip, device_id, detail, created_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))`
+    ).bind(
+      patientId,
+      String(event).slice(0, 64),
+      ip,
+      deviceId,
+      detail != null ? String(detail).slice(0, 500) : null
+    ).run();
+  } catch (e) {
+    // Table may not exist before migration 0009
+    console.warn('[auth_log]', e.message);
+  }
 }
 
 // Alias for backward compatibility if needed, though we'll update calls

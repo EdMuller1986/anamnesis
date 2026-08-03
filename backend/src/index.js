@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { getCookie } from 'hono/cookie';
 import * as authSession from './services/auth-session';
+import { checkRateLimit, clientRateKey } from './services/rate-limit';
 
 // Import Routes
 import documents from './routes/documents';
@@ -192,6 +193,26 @@ const authMiddleware = async (c, next) => {
   c.set('session', session);
   await next();
 };
+
+// Global API rate limit (per IP). Auth endpoints get a tighter window.
+app.use('/api/*', async (c, next) => {
+  const path = c.req.path;
+  const isAuth =
+    path.startsWith('/api/auth/login') ||
+    path.startsWith('/api/auth/verify-device') ||
+    path.startsWith('/api/webauthn/login');
+  const key = clientRateKey(c, isAuth ? 'auth' : 'api');
+  const limit = isAuth
+    ? { windowSec: 60, max: 30 }
+    : { windowSec: 60, max: Number(c.env.API_RATE_LIMIT_PER_MIN) || 180 };
+
+  const rl = await checkRateLimit(c.env.DB, key, limit);
+  if (!rl.allowed) {
+    c.header('Retry-After', String(rl.retryAfterSec || 60));
+    return c.json({ error: 'Too many requests', retry_after_sec: rl.retryAfterSec }, 429);
+  }
+  await next();
+});
 
 app.use('/api/*', authMiddleware);
 

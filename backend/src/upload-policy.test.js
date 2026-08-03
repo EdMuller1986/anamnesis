@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { validateUpload, fileResponseHeaders, MAX_UPLOAD_BYTES } from './services/upload-policy.js';
+import {
+  validateUpload,
+  validateBufferSignature,
+  sniffContentType,
+  fileResponseHeaders,
+  MAX_UPLOAD_BYTES,
+} from './services/upload-policy.js';
 
 function fakeFile({ name, type, size }) {
   return { name, type, size };
@@ -38,6 +44,27 @@ describe('upload-policy', () => {
     }));
     expect(r.ok).toBe(false);
     expect(r.status).toBe(413);
+  });
+
+  it('sniffs PDF magic bytes', () => {
+    const buf = new TextEncoder().encode('%PDF-1.4 fake');
+    expect(sniffContentType(buf)).toBe('application/pdf');
+    const ok = validateBufferSignature(buf, 'pdf', 'application/pdf');
+    expect(ok.ok).toBe(true);
+  });
+
+  it('rejects HTML content with .pdf extension', () => {
+    const buf = new TextEncoder().encode('<!DOCTYPE html><html><body>x</body></html>');
+    const r = validateBufferSignature(buf, 'pdf', 'application/pdf');
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(415);
+  });
+
+  it('accepts JPEG magic with .jpg', () => {
+    const buf = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0]);
+    const r = validateBufferSignature(buf, 'jpg', 'image/jpeg');
+    expect(r.ok).toBe(true);
+    expect(r.mime).toBe('image/jpeg');
   });
 
   it('uses private no-store cache headers', () => {

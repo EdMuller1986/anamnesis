@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import * as b2 from '../services/b2-storage';
-import { validateUpload, MAX_PHOTO_BYTES } from '../services/upload-policy';
+import { validateUpload, validateBufferSignature, MAX_PHOTO_BYTES } from '../services/upload-policy';
 
 const vaccinations = new Hono();
 
@@ -177,8 +177,14 @@ vaccinations.post('/:id/photos', async (c) => {
   ).bind(id, patientId).first();
   if (!vac) return c.json({ error: 'Not found' }, 404);
 
+  const buffer = await file.arrayBuffer();
+  const sig = validateBufferSignature(buffer, check.extension, check.mime);
+  if (!sig.ok) {
+    return c.json({ error: sig.error }, sig.status);
+  }
+
   const fileName = `vaccinations/${crypto.randomUUID()}.${check.extension}`;
-  await b2.uploadFile(c.env, fileName, await file.arrayBuffer(), check.mime);
+  await b2.uploadFile(c.env, fileName, buffer, sig.mime);
 
   const photos = JSON.parse(vac.photos || '[]');
   const fullPhotos = photos.map(p => `/api/vaccinations/photos/${p}`);

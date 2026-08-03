@@ -196,11 +196,50 @@ export async function getFullState(db) {
     results[t] = (await db.prepare(`SELECT * FROM ${t}`).all()).results || [];
   }
 
+  // B2 object manifest (keys only — bytes stay in bucket; full DR needs bucket intact)
+  results.b2_file_manifest = buildB2FileManifest(results);
+
   return {
-    version: '2.1.0',
+    version: '2.2.0',
     exported_at: new Date().toISOString(),
     scope: 'all_patients',
     data: results,
+    notes: {
+      b2_files: 'manifest lists object keys from documents/vaccinations; file bytes are NOT embedded. Keep B2 bucket or copy keys separately.',
+    },
+  };
+}
+
+/**
+ * Build list of B2 keys referenced by DB rows (for backup integrity / restore checklist).
+ */
+export function buildB2FileManifest(tables) {
+  const keys = [];
+  const seen = new Set();
+
+  const add = (key, source, id) => {
+    if (!key || typeof key !== 'string') return;
+    const k = key.replace(/^\/api\/vaccinations\/photos\//, '');
+    if (seen.has(k)) return;
+    seen.add(k);
+    keys.push({ key: k, source, id: id ?? null });
+  };
+
+  for (const doc of tables.documents || []) {
+    add(doc.file_path, 'documents', doc.id);
+  }
+  for (const vac of tables.vaccinations || []) {
+    try {
+      const photos = JSON.parse(vac.photos || '[]');
+      if (Array.isArray(photos)) {
+        for (const p of photos) add(p, 'vaccinations', vac.id);
+      }
+    } catch { /* skip */ }
+  }
+
+  return {
+    count: keys.length,
+    files: keys,
   };
 }
 

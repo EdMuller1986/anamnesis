@@ -58,8 +58,10 @@
 
 | Kind | Examples | Storage |
 |------|----------|---------|
-| Non-secret config | `CORS_ORIGINS`, `B2_ENDPOINT`, `B2_BUCKET_NAME`, `B2_KEY_ID`, `WEBAUTHN_*` | `[vars]` in wrangler.toml |
+| Non-secret config | `CORS_ORIGINS`, `B2_ENDPOINT`, `B2_BUCKET_NAME`, `B2_KEY_ID`, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN` | `[vars]` in wrangler.toml / GitHub secrets → CI |
 | Sensitive | `B2_APPLICATION_KEY`, `ADMIN_TOKEN`, `BACKUP_ENCRYPTION_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `APP_PIN` | **Worker Secrets** (`wrangler secret put`) |
+
+GitHub Actions also needs secrets `WEBAUTHN_RP_ID` and `WEBAUTHN_ORIGIN` (your Pages domain), plus `VITE_API_URL` for the frontend build and `_redirects` proxy.
 
 GitHub Actions deploy syncs the sensitive set via `wrangler secret put` after `wrangler deploy` (see `.github/workflows/cloudflare.yml`).
 

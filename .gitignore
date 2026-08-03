@@ -11,6 +11,10 @@ node_modules/
 wrangler.toml.local
 _redirects.local
 
+# Wrangler local cache may contain account id / email — never commit
+.wrangler/
+backend/.wrangler/
+
 # Build output
 frontend/dist/
 frontend/.vite/

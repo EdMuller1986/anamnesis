@@ -139,6 +139,11 @@ jobs:
       - name: Create wrangler.toml from secrets
         run: |
           cd backend
+          RP_ID="${{ secrets.WEBAUTHN_RP_ID }}"
+          RP_ORIGIN="${{ secrets.WEBAUTHN_ORIGIN }}"
+          # Fallback only if secrets not set yet (passkeys need real domain in production)
+          if [ -z "$RP_ID" ]; then RP_ID="localhost"; echo "::warning::WEBAUTHN_RP_ID secret empty — using localhost"; fi
+          if [ -z "$RP_ORIGIN" ]; then RP_ORIGIN="http://localhost:5173"; echo "::warning::WEBAUTHN_ORIGIN secret empty — using localhost"; fi
           cat > wrangler.toml << EOF
           name = "anamnesis-backend"
           main = "src/index.js"
@@ -156,8 +161,8 @@ jobs:
           B2_ENDPOINT = "${{ secrets.B2_ENDPOINT }}"
           B2_BUCKET_NAME = "${{ secrets.B2_BUCKET_NAME }}"
           B2_KEY_ID = "${{ secrets.B2_KEY_ID }}"
-          WEBAUTHN_RP_ID = "anamnesis-frontend.pages.dev"
-          WEBAUTHN_ORIGIN = "https://anamnesis-frontend.pages.dev"
+          WEBAUTHN_RP_ID = "${RP_ID}"
+          WEBAUTHN_ORIGIN = "${RP_ORIGIN}"
           WEBAUTHN_RP_NAME = "Anamnesis"
 
           [triggers]
@@ -243,15 +248,24 @@ jobs:
         run: |
           cd frontend
           npm run build
-          # Ensure _redirects and _headers are in dist
-          if [ ! -f dist/_redirects ]; then
-            cp public/_redirects dist/_redirects
+          # Generate _redirects from VITE_API_URL (avoid hardcoding another user's Worker)
+          # VITE_API_URL is like https://anamnesis-backend.xxx.workers.dev/api
+          API="${{ secrets.VITE_API_URL }}"
+          API="${API%/}"
+          # strip trailing /api for Pages proxy target base
+          ORIGIN="${API%/api}"
+          if [ -n "$ORIGIN" ]; then
+            echo "/api/* ${ORIGIN}/api/:splat 200" > dist/_redirects
+            echo "Generated _redirects -> ${ORIGIN}/api/:splat"
+          else
+            cp public/_redirects dist/_redirects || true
           fi
           if [ ! -f dist/_headers ]; then
             cp public/_headers dist/_headers
           fi
           echo "Build contents:"
           ls -F dist/
+          cat dist/_redirects || true
         env:
           # Set API URL for production build
           VITE_API_URL: ${{ secrets.VITE_API_URL }}

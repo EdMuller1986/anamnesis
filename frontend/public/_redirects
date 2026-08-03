@@ -1,1 +1,4 @@
-/api/* https://anamnesis-backend.simulyakrge.workers.dev/api/:splat 200
+# Proxy /api/* to your Cloudflare Worker.
+# For production: set this path in CI from secret WORKER_API_ORIGIN, or use public/_redirects.local.
+# Placeholder (replace with your Worker URL):
+/api/* https://YOUR_WORKER_SUBDOMAIN.workers.dev/api/:splat 200

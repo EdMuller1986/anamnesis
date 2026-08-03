@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import * as b2 from '../services/b2-storage';
-import { validateUpload, fileResponseHeaders } from '../services/upload-policy';
+import { validateUpload, validateBufferSignature, fileResponseHeaders, MAX_UPLOAD_BYTES } from '../services/upload-policy';
 
 const documents = new Hono();
 
@@ -73,12 +73,17 @@ documents.post('/', async (c) => {
   
   try {
     const buffer = await file.arrayBuffer();
-    if (buffer.byteLength > 50 * 1024 * 1024) {
+    if (buffer.byteLength > MAX_UPLOAD_BYTES) {
       return c.json({ error: 'File too large (max 50 MB)' }, 413);
     }
 
-    // Save to B2 with canonical MIME from policy (not raw client type)
-    await b2.uploadFile(c.env, fileName, buffer, check.mime);
+    const sig = validateBufferSignature(buffer, check.extension, check.mime);
+    if (!sig.ok) {
+      return c.json({ error: sig.error }, sig.status);
+    }
+
+    // Save to B2 with sniffed/canonical MIME
+    await b2.uploadFile(c.env, fileName, buffer, sig.mime);
 
     // Save to D1 (original_name / file_size for FE)
     const { results } = await c.env.DB.prepare(
@@ -89,7 +94,7 @@ documents.post('/', async (c) => {
       title,
       category,
       fileName,
-      check.mime,
+      sig.mime,
       notes,
       timelineId,
       patientId,
