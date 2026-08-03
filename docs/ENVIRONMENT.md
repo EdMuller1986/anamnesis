@@ -81,7 +81,8 @@ For local development:
 - Use `.env.example`, `wrangler.toml`, and `_redirects` as templates only (with placeholder values)
 - Store production secrets in Cloudflare Dashboard (Workers → Settings → **Secrets**, not plain Variables)
 - Use `wrangler secret put` for all sensitive keys
-- **Restore from backup** is currently disabled (`503`) until the path is rewritten; do not rely on auto-restore
+- **Restore from backup** is re-enabled with guards (unwrap + refuse empty wipe). It restores **JSON metadata only** (not B2 file bytes). Auto-restore in CI remains off.
+- CI runs `wrangler d1 migrations apply anamnesis-db --remote` **before** Worker deploy
 
 ## Multi-patient (family mode)
 

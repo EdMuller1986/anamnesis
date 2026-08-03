@@ -30,6 +30,7 @@ import visitDiagnoses from './routes/visit-diagnoses';
 import exportRoute from './routes/export';
 import webauthn from './routes/webauthn';
 import auth from './routes/auth';
+import changelog from './routes/changelog';
 import * as backup from './services/backup';
 import * as scheduler from './services/scheduler';
 
@@ -192,7 +193,22 @@ app.use('/api/admin/*', async (c, next) => {
 
 // ── Эндпоинты ──────────────────────────────────────────────
 
-app.get('/api/health', (c) => c.json({ status: 'ok', db: 'connected' }));
+app.get('/api/health', async (c) => {
+  try {
+    if (!c.env.DB) {
+      return c.json({ status: 'degraded', db: 'missing' }, 503);
+    }
+    // .bind() keeps D1 + test mocks consistent (some mocks only expose first after bind)
+    const row = await c.env.DB.prepare('SELECT 1 AS ok').bind().first();
+    if (!row || (row.ok !== 1 && row['1'] !== 1)) {
+      return c.json({ status: 'degraded', db: 'error' }, 503);
+    }
+    return c.json({ status: 'ok', db: 'connected' });
+  } catch (err) {
+    console.error('[health] DB check failed:', err);
+    return c.json({ status: 'error', db: 'disconnected', message: err.message }, 503);
+  }
+});
 app.get('/api/version', (c) => c.json({ version: '2.0.0-serverless' }));
 app.route('/api/webauthn', webauthn);
 app.route('/api/auth', auth);
@@ -222,6 +238,7 @@ app.route('/api/search', search);
 app.route('/api/prescriptions', prescriptions);
 app.route('/api/visit-diagnoses', visitDiagnoses);
 app.route('/api/export', exportRoute);
+app.route('/api/changelog', changelog);
 
 export default {
   fetch: app.fetch,

@@ -1,20 +1,63 @@
 import { Hono } from 'hono';
 import * as backup from '../services/backup';
+import { applyImport } from './admin';
 
 const adminTools = new Hono();
 
 // GET /api/admin/tools/integrity
 adminTools.get('/integrity', async (c) => {
+  const db = c.env.DB;
   const ftsValid = [];
   for (const tbl of ['timeline_fts', 'documents_fts', 'comments_fts']) {
     try {
-      await c.env.DB.prepare(`INSERT INTO ${tbl}(${tbl}) VALUES ('integrity-check')`).run();
+      await db.prepare(`INSERT INTO ${tbl}(${tbl}) VALUES ('integrity-check')`).run();
       ftsValid.push({ table: tbl, ok: true });
     } catch (e) {
       ftsValid.push({ table: tbl, ok: false, error: e.message });
     }
   }
-  return c.json({ integrity: 'D1 managed', foreign_key_violations: [], fts_status: ftsValid });
+
+  // Real-ish FK probes (D1 has limited PRAGMA support)
+  let foreign_key_violations = [];
+  try {
+    const checks = await Promise.all([
+      db.prepare(`
+        SELECT 'prescriptions.medication_id' AS fk, p.id AS row_id
+        FROM prescriptions p
+        LEFT JOIN medications m ON m.id = p.medication_id
+        WHERE p.medication_id IS NOT NULL AND m.id IS NULL
+        LIMIT 50
+      `).all(),
+      db.prepare(`
+        SELECT 'documents.timeline_id' AS fk, d.id AS row_id
+        FROM documents d
+        LEFT JOIN timeline t ON t.id = d.timeline_id
+        WHERE d.timeline_id IS NOT NULL AND t.id IS NULL
+        LIMIT 50
+      `).all(),
+      db.prepare(`
+        SELECT 'visit_diagnoses.visit_id' AS fk, vd.visit_id AS row_id
+        FROM visit_diagnoses vd
+        LEFT JOIN timeline t ON t.id = vd.visit_id
+        WHERE t.id IS NULL
+        LIMIT 50
+      `).all(),
+    ]);
+    foreign_key_violations = checks.flatMap((r) => r.results || []);
+  } catch (e) {
+    foreign_key_violations = [{ error: e.message }];
+  }
+
+  const fts_ok = ftsValid.every((f) => f.ok);
+  const fk_ok = foreign_key_violations.length === 0
+    || (foreign_key_violations.length === 1 && foreign_key_violations[0].error);
+
+  return c.json({
+    integrity: fts_ok && foreign_key_violations.filter((v) => !v.error).length === 0 ? 'ok' : 'issues',
+    foreign_key_violations: foreign_key_violations.filter((v) => !v.error),
+    fts_status: ftsValid,
+    ok: fts_ok && foreign_key_violations.filter((v) => !v.error).length === 0,
+  });
 });
 
 // GET /api/admin/tools/orphan-check
@@ -99,17 +142,22 @@ adminTools.get('/ai-review', async (c) => {
       db.prepare("SELECT COUNT(*) as count FROM comments WHERE patient_id = ? AND created_at > ?").bind(pid, lastReviewAt).first()
     ]);
 
+    const deadFks = orphanCheck?.fks || 0;
+    const orphanDocs = orphanCheck?.docs || 0;
+    const integrity_ok = deadFks === 0;
+    const ready_to_work = integrity_ok && (pendingAi.results || []).length === 0;
+
     return c.json({
-      integrity_ok: true, // D1 managed
-      fk_violations: [],
+      integrity_ok,
+      fk_violations: deadFks > 0 ? [{ type: 'prescriptions.medication_id', count: deadFks }] : [],
       pending_ai_requests: pendingAi.results,
-      orphan_counts: { documents: orphanCheck.docs, dead_fks: orphanCheck.fks },
+      orphan_counts: { documents: orphanDocs, dead_fks: deadFks },
       new_since_review: {
         timeline: newTimeline.count,
         documents: newDocs.count,
         comments: newComments.count
       },
-      ready_to_work: true,
+      ready_to_work,
       last_review_at: lastReviewAt
     });
   } catch (err) {
@@ -198,16 +246,24 @@ adminTools.post('/backup-now', async (c) => {
 });
 
 // POST /api/admin/tools/restore-from-backup
-// DISABLED (P0): previous implementation could wipe patient data then import nothing
-// (backup wrapper under state.data vs import top-level arrays; c.app.fetch; incomplete tables).
-// Re-enable only after a full backup/restore rewrite + round-trip tests on real D1.
+// Safe path: download latest B2 backup → unwrap → applyImport with wipe guard
+// (refuses wipe if payload has no table arrays). Still does NOT restore B2 file bytes.
 adminTools.post('/restore-from-backup', async (c) => {
-  return c.json({
-    error: 'Restore is disabled',
-    reason:
-      'Unsafe restore path (wipe + incomplete/mismatched import). Disabled until backup/restore is rewritten and tested.',
-    status: 'disabled',
-  }, 503);
+  const pid = c.get('patientId') || 1;
+  try {
+    const state = await backup.restoreFromLatest(c.env);
+    const payload = { ...state, wipe: true };
+    const result = await applyImport(c.env.DB, payload, pid);
+    return c.json({
+      ok: true,
+      message: 'Restore from latest B2 backup completed (metadata only; file blobs not re-uploaded)',
+      import_details: result,
+    });
+  } catch (err) {
+    console.error('[Restore] Failed:', err);
+    const status = err.status || 500;
+    return c.json({ error: 'Restore failed: ' + err.message }, status);
+  }
 });
 
 export default adminTools;

@@ -60,6 +60,69 @@ describe('Admin Import/Restore Logic', () => {
     expect(spy.deleteQueries).toContain('DELETE FROM documents WHERE patient_id = ?');
   });
 
+  it('POST /api/admin/import unwraps backup wrapper and accepts rows with id on wipe', async () => {
+    const inserts = [];
+    const dbWithSpy = {
+      prepare: (q) => ({
+        bind: (...args) => {
+          if (q.startsWith('INSERT INTO diagnoses')) inserts.push({ q, args });
+          return {
+            all: () => Promise.resolve({ results: [] }),
+            first: () => {
+              if (q.includes('app_settings')) return Promise.resolve({ value: '1.0.0' });
+              return Promise.resolve(null);
+            },
+            run: () => Promise.resolve({ success: true, meta: { changes: 1 } }),
+          };
+        },
+      }),
+      batch: (queries) => Promise.resolve(queries.map(() => ({ success: true }))),
+    };
+
+    const backupShape = {
+      version: '2.1.0',
+      exported_at: '2026-07-30T00:00:00.000Z',
+      patient_id: 1,
+      wipe: true,
+      data: {
+        diagnoses: [{ id: 42, name: 'Asthma', status: 'active' }],
+      },
+    };
+
+    const res = await app.fetch(new Request('http://localhost/api/admin/import', {
+      method: 'POST',
+      headers: {
+        'X-Admin-Token': 'test-admin-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(backupShape),
+    }), { ...mockEnv, DB: dbWithSpy });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(inserts.some((i) => i.q.includes('id,') && i.args.includes(42))).toBe(true);
+  });
+
+  it('POST /api/admin/import refuses wipe with empty nested data', async () => {
+    const res = await app.fetch(new Request('http://localhost/api/admin/import', {
+      method: 'POST',
+      headers: {
+        'X-Admin-Token': 'test-admin-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        wipe: true,
+        version: '2.0.0',
+        data: { diagnoses: [] },
+      }),
+    }), mockEnv);
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/Refusing wipe/i);
+  });
+
   it('POST /api/admin/import should support full state restoration (all tables)', async () => {
     const fullState = {
       diagnoses: [{ name: 'D1' }],

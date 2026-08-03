@@ -167,6 +167,41 @@ vaccinations.post('/:id/photos', async (c) => {
   return c.json({ photos: fullPhotos, added: `/api/vaccinations/photos/${fileName}` });
 });
 
+// DELETE /api/vaccinations/:id/photos — remove one photo by path or proxy URL
+vaccinations.delete('/:id/photos', async (c) => {
+  const id = c.req.param('id');
+  const patientId = c.get('patientId');
+  let body = {};
+  try { body = await c.req.json(); } catch { /* empty */ }
+  const raw = body.photo_url || body.photo || body.path;
+  if (!raw) return c.json({ error: 'photo_url required' }, 400);
+
+  let path = String(raw).replace(/^\/api\/vaccinations\/photos\//, '');
+  path = path.replace(/\.\.\//g, '');
+
+  const vac = await c.env.DB.prepare(
+    'SELECT photos FROM vaccinations WHERE id = ? AND patient_id = ?'
+  ).bind(id, patientId).first();
+  if (!vac) return c.json({ error: 'Not found' }, 404);
+
+  const photos = JSON.parse(vac.photos || '[]');
+  if (!photos.includes(path)) {
+    return c.json({ error: 'Photo not found on this vaccination' }, 404);
+  }
+
+  const next = photos.filter((p) => p !== path);
+  try { await b2.deleteFile(c.env, path); } catch (e) { /* best effort */ }
+
+  await c.env.DB.prepare(
+    `UPDATE vaccinations SET photos = ?, updated_at = datetime('now') WHERE id = ? AND patient_id = ?`
+  ).bind(JSON.stringify(next), id, patientId).run();
+
+  return c.json({
+    photos: next.map((p) => `/api/vaccinations/photos/${p}`),
+    removed: path,
+  });
+});
+
 // DELETE /api/vaccinations/:id
 vaccinations.delete('/:id', async (c) => {
   const id = c.req.param('id');

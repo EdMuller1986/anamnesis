@@ -12,7 +12,10 @@ global.fetch = vi.fn(() =>
 const mockDB = {
   prepare: (query) => ({
     bind: () => ({
-      first: () => Promise.resolve({ one: 1 }),
+      first: () => {
+        if (query.includes('SELECT 1')) return Promise.resolve({ ok: 1 });
+        return Promise.resolve({ one: 1 });
+      },
       all: () => Promise.resolve({ results: [] }),
       run: () => Promise.resolve({ success: true })
     })
@@ -76,15 +79,15 @@ describe('Anamnesis API Integration Tests', () => {
     expect(res.status).toBe(403);
   });
 
-  it('POST /api/admin/tools/restore-from-backup is disabled (503)', async () => {
+  it('POST /api/admin/tools/restore-from-backup refuses empty wipe (or fails without B2)', async () => {
     const res = await app.fetch(new Request('http://localhost/api/admin/tools/restore-from-backup', {
       method: 'POST',
       headers: { 'X-Admin-Token': 'test-admin-token' }
     }), mockEnv);
-    expect(res.status).toBe(503);
+    // Without real B2 backup this fails safely (4xx/5xx), never silent wipe
+    expect(res.status).toBeGreaterThanOrEqual(400);
     const data = await res.json();
-    expect(data.status).toBe('disabled');
-    expect(data.error).toMatch(/disabled/i);
+    expect(data.error || data.message || data.status).toBeTruthy();
   });
 
   it('GET /api/admin/tools returns 200 with valid admin token', async () => {

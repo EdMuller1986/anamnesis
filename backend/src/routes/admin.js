@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import * as telegram from '../services/telegram';
+import { unwrapBackupState } from '../services/backup';
 
 const admin = new Hono();
 
@@ -25,6 +26,23 @@ async function saveVersion(db, version, changes, reason, patientId = 1) {
     reason || 'Обновление данных',
     patientId
   ).run();
+}
+
+/** True when row should be inserted (AI create or full wipe restore with ids). */
+function wantsInsert(row, wipe) {
+  if (!row) return false;
+  if (row._action === 'delete' || row._action === 'update') return false;
+  if (row._action === 'insert' || row._action === 'restore') return true;
+  if (!row.id) return true;
+  return !!wipe;
+}
+
+function wantsUpdate(row, wipe) {
+  return !!(row?.id && row._action === 'update' && !wipe);
+}
+
+function wantsDelete(row, wipe) {
+  return !!(row?.id && row._action === 'delete' && !wipe);
 }
 
 // ─── GET /api/admin/state ───────────────────────────────────
@@ -96,279 +114,427 @@ admin.get('/state', async (c) => {
 
 // ─── POST /api/admin/import ─────────────────────────────────
 
-admin.post('/import', async (c) => {
-  const pid = c.get('patientId') || 1;
-  const db = c.env.DB;
-  const data = await c.req.json();
+/**
+ * Shared import/restore application (used by POST /import and restore-from-backup).
+ * @returns {{ ok: true, version, changes } | throws }
+ */
+export async function applyImport(db, rawBody, pid) {
+  const data = unwrapBackupState(rawBody) || {};
+  const wipe = data.wipe === true;
   const changeLog = [];
   const batch = [];
 
-  try {
-    // 0. Optional Wipe (Full Restore)
-    if (data.wipe === true) {
-      const tablesToWipe = [
-        'timeline', 'documents', 'diagnoses', 'medications', 
-        'specialists', 'lab_results', 'vaccinations', 'growth_log', 
-        'plan', 'medical_errors', 'reminders', 'prescriptions',
-        'ai_requests', 'visit_diagnoses'
-      ];
-      for (const t of tablesToWipe) {
-        batch.push(db.prepare(`DELETE FROM ${t} WHERE patient_id = ?`).bind(pid));
-      }
-      changeLog.push('Wiped all existing patient data for full restore');
+  // Guard: wipe without any medical arrays would destroy data for nothing
+  if (wipe) {
+    const hasAny = [
+      'timeline', 'diagnoses', 'medications', 'specialists', 'lab_results',
+      'vaccinations', 'growth_log', 'plan', 'medical_errors', 'reminders',
+      'prescriptions', 'documents', 'comments', 'ai_requests', 'visit_diagnoses',
+    ].some((k) => Array.isArray(data[k]) && data[k].length > 0);
+    if (!hasAny) {
+      const err = new Error('Refusing wipe: import payload has no table arrays (check backup unwrap)');
+      err.status = 400;
+      throw err;
     }
+  }
 
-    // 1. Process Timeline
-    if (Array.isArray(data.timeline)) {
-      for (const event of data.timeline) {
-        if (event.id && event._action === 'update') {
-          const sets = [];
-          const vals = [];
-          for (const key of ['title', 'description', 'category', 'event_date', 'notes']) {
-            if (event[key] !== undefined) {
-              sets.push(`${key} = ?`);
-              vals.push(event[key]);
-            }
+  if (wipe) {
+    const tablesToWipe = [
+      'timeline', 'documents', 'diagnoses', 'medications',
+      'specialists', 'lab_results', 'vaccinations', 'growth_log',
+      'plan', 'medical_errors', 'reminders', 'prescriptions',
+      'ai_requests', 'visit_diagnoses', 'comments',
+    ];
+    for (const t of tablesToWipe) {
+      batch.push(db.prepare(`DELETE FROM ${t} WHERE patient_id = ?`).bind(pid));
+    }
+    changeLog.push('Wiped existing patient-scoped data for full restore');
+  }
+
+  // 1. Timeline
+  if (Array.isArray(data.timeline)) {
+    for (const event of data.timeline) {
+      if (wantsUpdate(event, wipe)) {
+        const sets = [];
+        const vals = [];
+        for (const key of ['title', 'description', 'category', 'event_date', 'notes']) {
+          if (event[key] !== undefined) {
+            sets.push(`${key} = ?`);
+            vals.push(event[key]);
           }
-          if (sets.length > 0) {
-            vals.push(event.id, pid);
-            batch.push(db.prepare(`UPDATE timeline SET ${sets.join(', ')} WHERE id = ? AND patient_id = ?`).bind(...vals));
-            changeLog.push(`Updated event: ${event.title || event.id}`);
-          }
-        } else if (event.id && event._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM timeline WHERE id = ? AND patient_id = ?').bind(event.id, pid));
-          changeLog.push(`Deleted event: ${event.title || event.id}`);
-        } else if (!event.id) {
-          // New event (D1 doesn't support lastInsertRowid in batch easily for foreign keys)
-          // For now, we skip complex nested inserts in this simplified version or handle them separately
+        }
+        if (sets.length > 0) {
+          vals.push(event.id, pid);
+          batch.push(db.prepare(`UPDATE timeline SET ${sets.join(', ')} WHERE id = ? AND patient_id = ?`).bind(...vals));
+          changeLog.push(`Updated event: ${event.title || event.id}`);
+        }
+      } else if (wantsDelete(event, wipe)) {
+        batch.push(db.prepare('DELETE FROM timeline WHERE id = ? AND patient_id = ?').bind(event.id, pid));
+        changeLog.push(`Deleted event: ${event.title || event.id}`);
+      } else if (wantsInsert(event, wipe)) {
+        if (event.id && wipe) {
+          batch.push(db.prepare(
+            `INSERT INTO timeline (id, title, description, category, event_date, notes, patient_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          ).bind(event.id, event.title, event.description || null, event.category || null, event.event_date, event.notes || null, pid));
+        } else {
           batch.push(db.prepare(
             `INSERT INTO timeline (title, description, category, event_date, notes, patient_id)
              VALUES (?, ?, ?, ?, ?, ?)`
           ).bind(event.title, event.description || null, event.category || null, event.event_date, event.notes || null, pid));
-          changeLog.push(`Added event: ${event.title}`);
         }
+        changeLog.push(`Added event: ${event.title}`);
       }
     }
+  }
 
-    // 2. Process Diagnoses
-    if (Array.isArray(data.diagnoses)) {
-      for (const diag of data.diagnoses) {
-        if (diag.id && diag._action === 'update') {
-          batch.push(db.prepare('UPDATE diagnoses SET name = ?, icd_code = ?, status = ?, detail = ? WHERE id = ? AND patient_id = ?')
-            .bind(diag.name, diag.icd_code || null, diag.status || 'active', diag.detail || null, diag.id, pid));
-          changeLog.push(`Updated diagnosis: ${diag.name}`);
-        } else if (diag.id && diag._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM diagnoses WHERE id = ? AND patient_id = ?').bind(diag.id, pid));
-          changeLog.push(`Deleted diagnosis: ${diag.name}`);
-        } else if (!diag.id) {
+  // 2. Diagnoses
+  if (Array.isArray(data.diagnoses)) {
+    for (const diag of data.diagnoses) {
+      if (wantsUpdate(diag, wipe)) {
+        batch.push(db.prepare('UPDATE diagnoses SET name = ?, icd_code = ?, status = ?, detail = ? WHERE id = ? AND patient_id = ?')
+          .bind(diag.name, diag.icd_code || null, diag.status || 'active', diag.detail || null, diag.id, pid));
+        changeLog.push(`Updated diagnosis: ${diag.name}`);
+      } else if (wantsDelete(diag, wipe)) {
+        batch.push(db.prepare('DELETE FROM diagnoses WHERE id = ? AND patient_id = ?').bind(diag.id, pid));
+        changeLog.push(`Deleted diagnosis: ${diag.name}`);
+      } else if (wantsInsert(diag, wipe)) {
+        if (diag.id && wipe) {
+          batch.push(db.prepare('INSERT INTO diagnoses (id, name, icd_code, status, detail, patient_id) VALUES (?, ?, ?, ?, ?, ?)')
+            .bind(diag.id, diag.name, diag.icd_code || null, diag.status || 'active', diag.detail || null, pid));
+        } else {
           batch.push(db.prepare('INSERT INTO diagnoses (name, icd_code, status, detail, patient_id) VALUES (?, ?, ?, ?, ?)')
             .bind(diag.name, diag.icd_code || null, diag.status || 'active', diag.detail || null, pid));
-          changeLog.push(`Added diagnosis: ${diag.name}`);
         }
+        changeLog.push(`Added diagnosis: ${diag.name}`);
       }
     }
+  }
 
-    // 3. Process Medications
-    if (Array.isArray(data.medications)) {
-      for (const med of data.medications) {
-        if (med.id && med._action === 'update') {
-          batch.push(db.prepare('UPDATE medications SET name = ?, dosage = ?, frequency = ?, status = ?, detail = ? WHERE id = ? AND patient_id = ?')
-            .bind(med.name, med.dosage || null, med.frequency || null, med.status || 'active', med.detail || null, med.id, pid));
-          changeLog.push(`Updated medication: ${med.name}`);
-        } else if (med.id && med._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM medications WHERE id = ? AND patient_id = ?').bind(med.id, pid));
-          changeLog.push(`Deleted medication: ${med.name}`);
-        } else if (!med.id) {
+  // 3. Medications
+  if (Array.isArray(data.medications)) {
+    for (const med of data.medications) {
+      if (wantsUpdate(med, wipe)) {
+        batch.push(db.prepare('UPDATE medications SET name = ?, dosage = ?, frequency = ?, status = ?, detail = ? WHERE id = ? AND patient_id = ?')
+          .bind(med.name, med.dosage || null, med.frequency || null, med.status || 'active', med.detail || null, med.id, pid));
+        changeLog.push(`Updated medication: ${med.name}`);
+      } else if (wantsDelete(med, wipe)) {
+        batch.push(db.prepare('DELETE FROM medications WHERE id = ? AND patient_id = ?').bind(med.id, pid));
+        changeLog.push(`Deleted medication: ${med.name}`);
+      } else if (wantsInsert(med, wipe)) {
+        if (med.id && wipe) {
+          batch.push(db.prepare('INSERT INTO medications (id, name, dosage, frequency, status, detail, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .bind(med.id, med.name, med.dosage || null, med.frequency || null, med.status || 'active', med.detail || null, pid));
+        } else {
           batch.push(db.prepare('INSERT INTO medications (name, dosage, frequency, status, detail, patient_id) VALUES (?, ?, ?, ?, ?, ?)')
             .bind(med.name, med.dosage || null, med.frequency || null, med.status || 'active', med.detail || null, pid));
-          changeLog.push(`Added medication: ${med.name}`);
         }
+        changeLog.push(`Added medication: ${med.name}`);
       }
     }
+  }
 
-    // 4. Process Specialists
-    if (Array.isArray(data.specialists)) {
-      for (const spec of data.specialists) {
-        if (spec.id && spec._action === 'update') {
-          batch.push(db.prepare('UPDATE specialists SET full_name = ?, specialization = ?, clinic = ?, notes = ? WHERE id = ? AND patient_id = ?')
-            .bind(spec.full_name, spec.specialization || null, spec.clinic || null, spec.notes || null, spec.id, pid));
-          changeLog.push(`Updated specialist: ${spec.full_name}`);
-        } else if (spec.id && spec._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM specialists WHERE id = ? AND patient_id = ?').bind(spec.id, pid));
-          changeLog.push(`Deleted specialist: ${spec.full_name}`);
-        } else if (!spec.id) {
+  // 4. Specialists
+  if (Array.isArray(data.specialists)) {
+    for (const spec of data.specialists) {
+      if (wantsUpdate(spec, wipe)) {
+        batch.push(db.prepare('UPDATE specialists SET full_name = ?, specialization = ?, clinic = ?, notes = ? WHERE id = ? AND patient_id = ?')
+          .bind(spec.full_name, spec.specialization || null, spec.clinic || null, spec.notes || null, spec.id, pid));
+        changeLog.push(`Updated specialist: ${spec.full_name}`);
+      } else if (wantsDelete(spec, wipe)) {
+        batch.push(db.prepare('DELETE FROM specialists WHERE id = ? AND patient_id = ?').bind(spec.id, pid));
+        changeLog.push(`Deleted specialist: ${spec.full_name}`);
+      } else if (wantsInsert(spec, wipe)) {
+        if (spec.id && wipe) {
+          batch.push(db.prepare('INSERT INTO specialists (id, full_name, specialization, clinic, notes, patient_id) VALUES (?, ?, ?, ?, ?, ?)')
+            .bind(spec.id, spec.full_name, spec.specialization || null, spec.clinic || null, spec.notes || null, pid));
+        } else {
           batch.push(db.prepare('INSERT INTO specialists (full_name, specialization, clinic, notes, patient_id) VALUES (?, ?, ?, ?, ?)')
             .bind(spec.full_name, spec.specialization || null, spec.clinic || null, spec.notes || null, pid));
-          changeLog.push(`Added specialist: ${spec.full_name}`);
         }
+        changeLog.push(`Added specialist: ${spec.full_name}`);
       }
     }
+  }
 
-    // 5. Process Lab Results
-    if (Array.isArray(data.lab_results)) {
-      for (const lab of data.lab_results) {
-        if (lab.id && lab._action === 'update') {
-          batch.push(db.prepare('UPDATE lab_results SET test_date = ?, test_name = ?, parameter = ?, value = ?, unit = ?, ref_min = ?, ref_max = ?, status = ?, notes = ? WHERE id = ? AND patient_id = ?')
-            .bind(lab.test_date, lab.test_name, lab.parameter, lab.value, lab.unit, lab.ref_min, lab.ref_max, lab.status || 'normal', lab.notes || null, lab.id, pid));
-          changeLog.push(`Updated lab result: ${lab.test_name} - ${lab.parameter}`);
-        } else if (lab.id && lab._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM lab_results WHERE id = ? AND patient_id = ?').bind(lab.id, pid));
-          changeLog.push(`Deleted lab result: ${lab.id}`);
-        } else if (!lab.id) {
+  // 5. Lab Results
+  if (Array.isArray(data.lab_results)) {
+    for (const lab of data.lab_results) {
+      if (wantsUpdate(lab, wipe)) {
+        batch.push(db.prepare('UPDATE lab_results SET test_date = ?, test_name = ?, parameter = ?, value = ?, unit = ?, ref_min = ?, ref_max = ?, status = ?, notes = ? WHERE id = ? AND patient_id = ?')
+          .bind(lab.test_date, lab.test_name, lab.parameter, lab.value, lab.unit, lab.ref_min, lab.ref_max, lab.status || 'normal', lab.notes || null, lab.id, pid));
+        changeLog.push(`Updated lab result: ${lab.test_name} - ${lab.parameter}`);
+      } else if (wantsDelete(lab, wipe)) {
+        batch.push(db.prepare('DELETE FROM lab_results WHERE id = ? AND patient_id = ?').bind(lab.id, pid));
+        changeLog.push(`Deleted lab result: ${lab.id}`);
+      } else if (wantsInsert(lab, wipe)) {
+        if (lab.id && wipe) {
+          batch.push(db.prepare('INSERT INTO lab_results (id, test_date, test_name, parameter, value, unit, ref_min, ref_max, status, notes, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(lab.id, lab.test_date, lab.test_name, lab.parameter, lab.value, lab.unit, lab.ref_min, lab.ref_max, lab.status || 'normal', lab.notes || null, pid));
+        } else {
           batch.push(db.prepare('INSERT INTO lab_results (test_date, test_name, parameter, value, unit, ref_min, ref_max, status, notes, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
             .bind(lab.test_date, lab.test_name, lab.parameter, lab.value, lab.unit, lab.ref_min, lab.ref_max, lab.status || 'normal', lab.notes || null, pid));
-          changeLog.push(`Added lab result: ${lab.test_name} - ${lab.parameter}`);
         }
+        changeLog.push(`Added lab result: ${lab.test_name} - ${lab.parameter}`);
       }
     }
+  }
 
-    // 6. Process Vaccinations
-    if (Array.isArray(data.vaccinations)) {
-      for (const vac of data.vaccinations) {
-        if (vac.id && vac._action === 'update') {
-          batch.push(db.prepare('UPDATE vaccinations SET name = ?, vaccine_name = ?, dose_number = ?, scheduled_date = ?, actual_date = ?, status = ?, reaction = ?, notes = ? WHERE id = ? AND patient_id = ?')
-            .bind(vac.name, vac.vaccine_name || null, vac.dose_number || 1, vac.scheduled_date || null, vac.actual_date || null, vac.status || 'scheduled', vac.reaction || null, vac.notes || null, vac.id, pid));
-          changeLog.push(`Updated vaccination: ${vac.name}`);
-        } else if (vac.id && vac._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM vaccinations WHERE id = ? AND patient_id = ?').bind(vac.id, pid));
-          changeLog.push(`Deleted vaccination: ${vac.name}`);
-        } else if (!vac.id) {
+  // 6. Vaccinations
+  if (Array.isArray(data.vaccinations)) {
+    for (const vac of data.vaccinations) {
+      if (wantsUpdate(vac, wipe)) {
+        batch.push(db.prepare('UPDATE vaccinations SET name = ?, vaccine_name = ?, dose_number = ?, scheduled_date = ?, actual_date = ?, status = ?, reaction = ?, notes = ? WHERE id = ? AND patient_id = ?')
+          .bind(vac.name, vac.vaccine_name || null, vac.dose_number || 1, vac.scheduled_date || null, vac.actual_date || null, vac.status || 'scheduled', vac.reaction || null, vac.notes || null, vac.id, pid));
+        changeLog.push(`Updated vaccination: ${vac.name}`);
+      } else if (wantsDelete(vac, wipe)) {
+        batch.push(db.prepare('DELETE FROM vaccinations WHERE id = ? AND patient_id = ?').bind(vac.id, pid));
+        changeLog.push(`Deleted vaccination: ${vac.name}`);
+      } else if (wantsInsert(vac, wipe)) {
+        if (vac.id && wipe) {
+          batch.push(db.prepare('INSERT INTO vaccinations (id, name, vaccine_name, dose_number, scheduled_date, actual_date, status, reaction, notes, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(vac.id, vac.name, vac.vaccine_name || null, vac.dose_number || 1, vac.scheduled_date || null, vac.actual_date || null, vac.status || 'scheduled', vac.reaction || null, vac.notes || null, pid));
+        } else {
           batch.push(db.prepare('INSERT INTO vaccinations (name, vaccine_name, dose_number, scheduled_date, actual_date, status, reaction, notes, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
             .bind(vac.name, vac.vaccine_name || null, vac.dose_number || 1, vac.scheduled_date || null, vac.actual_date || null, vac.status || 'scheduled', vac.reaction || null, vac.notes || null, pid));
-          changeLog.push(`Added vaccination: ${vac.name}`);
         }
+        changeLog.push(`Added vaccination: ${vac.name}`);
       }
     }
+  }
 
-    // 7. Process Growth Log
-    if (Array.isArray(data.growth_log)) {
-      for (const g of data.growth_log) {
-        if (g.id && g._action === 'update') {
-          batch.push(db.prepare('UPDATE growth_log SET measured_at = ?, height_cm = ?, weight_kg = ?, head_circumference_cm = ?, notes = ? WHERE id = ? AND patient_id = ?')
-            .bind(g.measured_at, g.height_cm, g.weight_kg, g.head_circumference_cm || null, g.notes || null, g.id, pid));
-          changeLog.push(`Updated growth record: ${g.measured_at}`);
-        } else if (g.id && g._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM growth_log WHERE id = ? AND patient_id = ?').bind(g.id, pid));
-          changeLog.push(`Deleted growth record: ${g.id}`);
-        } else if (!g.id) {
+  // 7. Growth
+  if (Array.isArray(data.growth_log)) {
+    for (const g of data.growth_log) {
+      if (wantsUpdate(g, wipe)) {
+        batch.push(db.prepare('UPDATE growth_log SET measured_at = ?, height_cm = ?, weight_kg = ?, head_circumference_cm = ?, notes = ? WHERE id = ? AND patient_id = ?')
+          .bind(g.measured_at, g.height_cm, g.weight_kg, g.head_circumference_cm || null, g.notes || null, g.id, pid));
+        changeLog.push(`Updated growth record: ${g.measured_at}`);
+      } else if (wantsDelete(g, wipe)) {
+        batch.push(db.prepare('DELETE FROM growth_log WHERE id = ? AND patient_id = ?').bind(g.id, pid));
+        changeLog.push(`Deleted growth record: ${g.id}`);
+      } else if (wantsInsert(g, wipe)) {
+        if (g.id && wipe) {
+          batch.push(db.prepare('INSERT INTO growth_log (id, measured_at, height_cm, weight_kg, head_circumference_cm, notes, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .bind(g.id, g.measured_at, g.height_cm, g.weight_kg, g.head_circumference_cm || null, g.notes || null, pid));
+        } else {
           batch.push(db.prepare('INSERT INTO growth_log (measured_at, height_cm, weight_kg, head_circumference_cm, notes, patient_id) VALUES (?, ?, ?, ?, ?, ?)')
             .bind(g.measured_at, g.height_cm, g.weight_kg, g.head_circumference_cm || null, g.notes || null, pid));
-          changeLog.push(`Added growth record: ${g.measured_at}`);
         }
+        changeLog.push(`Added growth record: ${g.measured_at}`);
       }
     }
+  }
 
-    // 8. Process Plan
-    if (Array.isArray(data.plan)) {
-      for (const p of data.plan) {
-        if (p.id && p._action === 'update') {
-          batch.push(db.prepare('UPDATE plan SET title = ?, detail = ?, advice = ?, status = ?, priority = ?, due_date = ?, outcome = ? WHERE id = ? AND patient_id = ?')
-            .bind(p.title, p.detail || null, p.advice || null, p.status || 'pending', p.priority || 'medium', p.due_date || null, p.outcome || null, p.id, pid));
-          changeLog.push(`Updated plan task: ${p.title}`);
-        } else if (p.id && p._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM plan WHERE id = ? AND patient_id = ?').bind(p.id, pid));
-          changeLog.push(`Deleted plan task: ${p.title}`);
-        } else if (!p.id) {
+  // 8. Plan
+  if (Array.isArray(data.plan)) {
+    for (const p of data.plan) {
+      if (wantsUpdate(p, wipe)) {
+        batch.push(db.prepare('UPDATE plan SET title = ?, detail = ?, advice = ?, status = ?, priority = ?, due_date = ?, outcome = ? WHERE id = ? AND patient_id = ?')
+          .bind(p.title, p.detail || null, p.advice || null, p.status || 'pending', p.priority || 'medium', p.due_date || null, p.outcome || null, p.id, pid));
+        changeLog.push(`Updated plan task: ${p.title}`);
+      } else if (wantsDelete(p, wipe)) {
+        batch.push(db.prepare('DELETE FROM plan WHERE id = ? AND patient_id = ?').bind(p.id, pid));
+        changeLog.push(`Deleted plan task: ${p.title}`);
+      } else if (wantsInsert(p, wipe)) {
+        if (p.id && wipe) {
+          batch.push(db.prepare('INSERT INTO plan (id, title, detail, advice, status, priority, due_date, outcome, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(p.id, p.title, p.detail || null, p.advice || null, p.status || 'pending', p.priority || 'medium', p.due_date || null, p.outcome || null, pid));
+        } else {
           batch.push(db.prepare('INSERT INTO plan (title, detail, advice, status, priority, due_date, outcome, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
             .bind(p.title, p.detail || null, p.advice || null, p.status || 'pending', p.priority || 'medium', p.due_date || null, p.outcome || null, pid));
-          changeLog.push(`Added plan task: ${p.title}`);
         }
+        changeLog.push(`Added plan task: ${p.title}`);
       }
     }
+  }
 
-    // 9. Process Medical Errors
-    if (Array.isArray(data.medical_errors)) {
-      for (const e of data.medical_errors) {
-        if (e.id && e._action === 'update') {
-          batch.push(db.prepare('UPDATE medical_errors SET title = ?, detail = ?, advice = ?, severity = ?, status = ?, resolution = ? WHERE id = ? AND patient_id = ?')
-            .bind(e.title, e.detail || null, e.advice || null, e.severity || 'medium', e.status || 'open', e.resolution || null, e.id, pid));
-          changeLog.push(`Updated anomaly/error: ${e.title}`);
-        } else if (e.id && e._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM medical_errors WHERE id = ? AND patient_id = ?').bind(e.id, pid));
-          changeLog.push(`Deleted anomaly/error: ${e.title}`);
-        } else if (!e.id) {
+  // 9. Medical errors
+  if (Array.isArray(data.medical_errors)) {
+    for (const e of data.medical_errors) {
+      if (wantsUpdate(e, wipe)) {
+        batch.push(db.prepare('UPDATE medical_errors SET title = ?, detail = ?, advice = ?, severity = ?, status = ?, resolution = ? WHERE id = ? AND patient_id = ?')
+          .bind(e.title, e.detail || null, e.advice || null, e.severity || 'medium', e.status || 'open', e.resolution || null, e.id, pid));
+        changeLog.push(`Updated anomaly/error: ${e.title}`);
+      } else if (wantsDelete(e, wipe)) {
+        batch.push(db.prepare('DELETE FROM medical_errors WHERE id = ? AND patient_id = ?').bind(e.id, pid));
+        changeLog.push(`Deleted anomaly/error: ${e.title}`);
+      } else if (wantsInsert(e, wipe)) {
+        if (e.id && wipe) {
+          batch.push(db.prepare('INSERT INTO medical_errors (id, title, detail, advice, severity, status, resolution, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(e.id, e.title, e.detail || null, e.advice || null, e.severity || 'medium', e.status || 'open', e.resolution || null, pid));
+        } else {
           batch.push(db.prepare('INSERT INTO medical_errors (title, detail, advice, severity, status, resolution, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
             .bind(e.title, e.detail || null, e.advice || null, e.severity || 'medium', e.status || 'open', e.resolution || null, pid));
-          changeLog.push(`Added anomaly/error: ${e.title}`);
         }
+        changeLog.push(`Added anomaly/error: ${e.title}`);
       }
     }
+  }
 
-    // 10. Process Reminders
-    if (Array.isArray(data.reminders)) {
-      for (const r of data.reminders) {
-        if (r.id && r._action === 'update') {
-          batch.push(db.prepare('UPDATE reminders SET title = ?, remind_at = ?, status = ? WHERE id = ? AND patient_id = ?')
-            .bind(r.title, r.remind_at, r.status || 'pending', r.id, pid));
-          changeLog.push(`Updated reminder: ${r.title}`);
-        } else if (r.id && r._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM reminders WHERE id = ? AND patient_id = ?').bind(r.id, pid));
-          changeLog.push(`Deleted reminder: ${r.title}`);
-        } else if (!r.id) {
+  // 10. Reminders
+  if (Array.isArray(data.reminders)) {
+    for (const r of data.reminders) {
+      if (wantsUpdate(r, wipe)) {
+        batch.push(db.prepare('UPDATE reminders SET title = ?, remind_at = ?, status = ? WHERE id = ? AND patient_id = ?')
+          .bind(r.title, r.remind_at, r.status || 'pending', r.id, pid));
+        changeLog.push(`Updated reminder: ${r.title}`);
+      } else if (wantsDelete(r, wipe)) {
+        batch.push(db.prepare('DELETE FROM reminders WHERE id = ? AND patient_id = ?').bind(r.id, pid));
+        changeLog.push(`Deleted reminder: ${r.title}`);
+      } else if (wantsInsert(r, wipe)) {
+        if (r.id && wipe) {
+          batch.push(db.prepare('INSERT INTO reminders (id, title, remind_at, status, patient_id) VALUES (?, ?, ?, ?, ?)')
+            .bind(r.id, r.title, r.remind_at, r.status || 'pending', pid));
+        } else {
           batch.push(db.prepare('INSERT INTO reminders (title, remind_at, status, patient_id) VALUES (?, ?, ?, ?)')
             .bind(r.title, r.remind_at, r.status || 'pending', pid));
-          changeLog.push(`Added reminder: ${r.title}`);
         }
+        changeLog.push(`Added reminder: ${r.title}`);
       }
     }
+  }
 
-    // 11. Process Prescriptions
-    if (Array.isArray(data.prescriptions)) {
-      for (const pr of data.prescriptions) {
-        if (pr.id && pr._action === 'update') {
-          batch.push(db.prepare('UPDATE prescriptions SET medication_id = ?, diagnosis_id = ?, specialist_id = ?, timeline_id = ?, dosage = ?, frequency = ?, start_date = ?, end_date = ?, course_status = ?, stop_reason = ?, duration_text = ?, rationale = ? WHERE id = ? AND patient_id = ?')
-            .bind(pr.medication_id, pr.diagnosis_id || null, pr.specialist_id || null, pr.timeline_id || null, pr.dosage || null, pr.frequency || null, pr.start_date || null, pr.end_date || null, pr.course_status || 'active', pr.stop_reason || null, pr.duration_text || null, pr.rationale || null, pr.id, pid));
-          changeLog.push(`Updated prescription #${pr.id}`);
-        } else if (pr.id && pr._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM prescriptions WHERE id = ? AND patient_id = ?').bind(pr.id, pid));
-          changeLog.push(`Deleted prescription #${pr.id}`);
-        } else if (!pr.id) {
+  // 11. Prescriptions
+  if (Array.isArray(data.prescriptions)) {
+    for (const pr of data.prescriptions) {
+      if (wantsUpdate(pr, wipe)) {
+        batch.push(db.prepare('UPDATE prescriptions SET medication_id = ?, diagnosis_id = ?, specialist_id = ?, timeline_id = ?, dosage = ?, frequency = ?, start_date = ?, end_date = ?, course_status = ?, stop_reason = ?, duration_text = ?, rationale = ? WHERE id = ? AND patient_id = ?')
+          .bind(pr.medication_id, pr.diagnosis_id || null, pr.specialist_id || null, pr.timeline_id || null, pr.dosage || null, pr.frequency || null, pr.start_date || null, pr.end_date || null, pr.course_status || 'active', pr.stop_reason || null, pr.duration_text || null, pr.rationale || null, pr.id, pid));
+        changeLog.push(`Updated prescription #${pr.id}`);
+      } else if (wantsDelete(pr, wipe)) {
+        batch.push(db.prepare('DELETE FROM prescriptions WHERE id = ? AND patient_id = ?').bind(pr.id, pid));
+        changeLog.push(`Deleted prescription #${pr.id}`);
+      } else if (wantsInsert(pr, wipe)) {
+        if (pr.id && wipe) {
+          batch.push(db.prepare('INSERT INTO prescriptions (id, medication_id, diagnosis_id, specialist_id, timeline_id, dosage, frequency, start_date, end_date, course_status, stop_reason, duration_text, rationale, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(pr.id, pr.medication_id, pr.diagnosis_id || null, pr.specialist_id || null, pr.timeline_id || null, pr.dosage || null, pr.frequency || null, pr.start_date || null, pr.end_date || null, pr.course_status || 'active', pr.stop_reason || null, pr.duration_text || null, pr.rationale || null, pid));
+        } else {
           batch.push(db.prepare('INSERT INTO prescriptions (medication_id, diagnosis_id, specialist_id, timeline_id, dosage, frequency, start_date, end_date, course_status, stop_reason, duration_text, rationale, patient_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
             .bind(pr.medication_id, pr.diagnosis_id || null, pr.specialist_id || null, pr.timeline_id || null, pr.dosage || null, pr.frequency || null, pr.start_date || null, pr.end_date || null, pr.course_status || 'active', pr.stop_reason || null, pr.duration_text || null, pr.rationale || null, pid));
-          changeLog.push(`Added prescription for medication #${pr.medication_id}`);
         }
+        changeLog.push(`Added prescription for medication #${pr.medication_id}`);
       }
     }
+  }
 
-    // 12. Process Visit Diagnoses
-    if (Array.isArray(data.visit_diagnoses)) {
-      for (const vd of data.visit_diagnoses) {
-        if (vd._action === 'delete') {
-          batch.push(db.prepare('DELETE FROM visit_diagnoses WHERE visit_id = ? AND diagnosis_id = ? AND patient_id = ?').bind(vd.visit_id, vd.diagnosis_id, pid));
-          changeLog.push(`Removed diagnosis #${vd.diagnosis_id} from visit #${vd.visit_id}`);
-        } else {
-          // Use INSERT OR REPLACE for many-to-many
-          batch.push(db.prepare('INSERT OR REPLACE INTO visit_diagnoses (visit_id, diagnosis_id, relation, patient_id) VALUES (?, ?, ?, ?)')
-            .bind(vd.visit_id, vd.diagnosis_id, vd.relation || 'discussed', pid));
-          changeLog.push(`Linked diagnosis #${vd.diagnosis_id} to visit #${vd.visit_id}`);
-        }
+  // 12. Visit diagnoses
+  if (Array.isArray(data.visit_diagnoses)) {
+    for (const vd of data.visit_diagnoses) {
+      if (vd._action === 'delete' && !wipe) {
+        batch.push(db.prepare('DELETE FROM visit_diagnoses WHERE visit_id = ? AND diagnosis_id = ? AND patient_id = ?').bind(vd.visit_id, vd.diagnosis_id, pid));
+        changeLog.push(`Removed diagnosis #${vd.diagnosis_id} from visit #${vd.visit_id}`);
+      } else {
+        batch.push(db.prepare('INSERT OR REPLACE INTO visit_diagnoses (visit_id, diagnosis_id, relation, patient_id) VALUES (?, ?, ?, ?)')
+          .bind(vd.visit_id, vd.diagnosis_id, vd.relation || 'discussed', pid));
+        changeLog.push(`Linked diagnosis #${vd.diagnosis_id} to visit #${vd.visit_id}`);
       }
     }
+  }
 
-    if (batch.length > 0) {
-      await db.batch(batch);
+  // 13. Documents (metadata only — B2 blobs not in JSON backup yet)
+  if (Array.isArray(data.documents)) {
+    for (const doc of data.documents) {
+      if (wantsDelete(doc, wipe)) {
+        batch.push(db.prepare('DELETE FROM documents WHERE id = ? AND patient_id = ?').bind(doc.id, pid));
+        changeLog.push(`Deleted document: ${doc.title || doc.id}`);
+      } else if (wantsInsert(doc, wipe)) {
+        if (doc.id && wipe) {
+          batch.push(db.prepare(
+            `INSERT INTO documents (id, title, category, file_path, mime_type, notes, timeline_id, patient_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(doc.id, doc.title, doc.category || 'report', doc.file_path, doc.mime_type || null, doc.notes || null, doc.timeline_id || null, pid));
+        } else if (!doc.id) {
+          batch.push(db.prepare(
+            `INSERT INTO documents (title, category, file_path, mime_type, notes, timeline_id, patient_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          ).bind(doc.title, doc.category || 'report', doc.file_path, doc.mime_type || null, doc.notes || null, doc.timeline_id || null, pid));
+        }
+        changeLog.push(`Added document meta: ${doc.title}`);
+      }
     }
+  }
 
-    // Update version
-    const currentVer = await getCurrentVersion(db, pid);
-    const newVer = incrementVersion(currentVer);
-    await saveVersion(db, newVer, changeLog, 'AI Import', pid);
+  // 14. Comments
+  if (Array.isArray(data.comments)) {
+    for (const cm of data.comments) {
+      if (wantsDelete(cm, wipe)) {
+        batch.push(db.prepare('DELETE FROM comments WHERE id = ? AND patient_id = ?').bind(cm.id, pid));
+      } else if (wantsInsert(cm, wipe)) {
+        if (cm.id && wipe) {
+          batch.push(db.prepare(
+            `INSERT INTO comments (id, entity_type, entity_id, text, author, patient_id)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          ).bind(cm.id, cm.entity_type, cm.entity_id, cm.text, cm.author || 'user', pid));
+        } else if (!cm.id) {
+          batch.push(db.prepare(
+            `INSERT INTO comments (entity_type, entity_id, text, author, patient_id)
+             VALUES (?, ?, ?, ?, ?)`
+          ).bind(cm.entity_type, cm.entity_id, cm.text, cm.author || 'user', pid));
+        }
+        changeLog.push(`Added comment on ${cm.entity_type}#${cm.entity_id}`);
+      }
+    }
+  }
 
-    // Telegram notification
-    const summary = changeLog.length > 5 ? `${changeLog.slice(0, 5).join('\n')}... (+${changeLog.length - 5})` : changeLog.join('\n');
-    telegram.sendMessage(c.env, 
+  // 15. AI requests
+  if (Array.isArray(data.ai_requests)) {
+    for (const ar of data.ai_requests) {
+      if (wantsDelete(ar, wipe)) {
+        batch.push(db.prepare('DELETE FROM ai_requests WHERE id = ? AND patient_id = ?').bind(ar.id, pid));
+      } else if (wantsInsert(ar, wipe)) {
+        if (ar.id && wipe) {
+          batch.push(db.prepare(
+            `INSERT INTO ai_requests (id, entity_type, entity_id, status, patient_id, completed_at)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          ).bind(ar.id, ar.entity_type, ar.entity_id, ar.status || 'pending', pid, ar.completed_at || null));
+        } else if (!ar.id) {
+          batch.push(db.prepare(
+            `INSERT INTO ai_requests (entity_type, entity_id, status, patient_id)
+             VALUES (?, ?, ?, ?)`
+          ).bind(ar.entity_type, ar.entity_id, ar.status || 'pending', pid));
+        }
+        changeLog.push(`Added ai_request ${ar.entity_type}#${ar.entity_id}`);
+      }
+    }
+  }
+
+  if (batch.length > 0) {
+    await db.batch(batch);
+  }
+
+  const currentVer = await getCurrentVersion(db, pid);
+  const newVer = incrementVersion(currentVer);
+  await saveVersion(db, newVer, changeLog, wipe ? 'Backup restore' : 'AI Import', pid);
+
+  return { ok: true, version: newVer, changes: changeLog };
+}
+
+admin.post('/import', async (c) => {
+  const pid = c.get('patientId') || 1;
+  const db = c.env.DB;
+  const data = await c.req.json();
+
+  try {
+    const result = await applyImport(db, data, pid);
+
+    const summary = result.changes.length > 5
+      ? `${result.changes.slice(0, 5).join('\n')}... (+${result.changes.length - 5})`
+      : result.changes.join('\n');
+    telegram.sendMessage(c.env,
       `<b>[AI IMPORT SUCCESS]</b>\n\n` +
       `Данные успешно импортированы ИИ-координатором.\n\n` +
-      `• Версия: <b>${newVer}</b>\n` +
+      `• Версия: <b>${result.version}</b>\n` +
       `• Пациент ID: ${pid}\n` +
-      `• Изменений: ${changeLog.length}\n\n` +
+      `• Изменений: ${result.changes.length}\n\n` +
       `<code>${summary}</code>`
     ).catch(() => {});
 
-    return c.json({ ok: true, version: newVer, changes: changeLog });
+    return c.json(result);
   } catch (err) {
     console.error('Import error:', err);
-    return c.json({ error: 'Import failed: ' + err.message }, 500);
+    const status = err.status || 500;
+    return c.json({ error: 'Import failed: ' + err.message }, status);
   }
 });
 
