@@ -35,7 +35,7 @@ auth.post('/login', async (c) => {
 
     if (!authSession.isValidPin(String(pin ?? ''))) {
       await authSession.logAuthEvent(db, { patientId, event: 'login_invalid_format', ip, deviceId });
-      return c.json({ error: 'PIN must be 4–10 digits' }, 400);
+      return c.json({ error: 'PIN must be exactly 6 digits' }, 400);
     }
     
     let storedHash = await db.prepare('SELECT value FROM app_settings WHERE key = ?').bind(`pin_hash_${patientId}`).first('value');
@@ -235,7 +235,7 @@ auth.post('/change-pin', async (c) => {
 
   if (!old_pin || !new_pin) return c.json({ error: 'old_pin and new_pin are required' }, 400);
   if (!authSession.isValidPin(String(new_pin))) {
-    return c.json({ error: 'New PIN must be 4–10 digits' }, 400);
+    return c.json({ error: 'New PIN must be exactly 6 digits' }, 400);
   }
 
   const storedHash = await db.prepare('SELECT value FROM app_settings WHERE key = ?')

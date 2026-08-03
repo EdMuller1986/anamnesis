@@ -80,9 +80,9 @@ export function timingSafeEqualHex(a, b) {
   return mismatch === 0;
 }
 
-/** PIN policy: 4–10 digits (upstream-compatible). */
+/** PIN policy: exactly 6 digits. */
 export function isValidPin(pin) {
-  return typeof pin === 'string' && /^\d{4,10}$/.test(pin);
+  return typeof pin === 'string' && /^\d{6}$/.test(pin);
 }
 
 /**

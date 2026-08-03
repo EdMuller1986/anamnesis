@@ -461,9 +461,9 @@ function ChangePinDialog({
 
   return (
     <DialogShell title="Смена PIN" onClose={onClose}>
-      <InlineInput label="Текущий PIN" value={oldPin} onChange={setOldPin} type="password" inputMode="numeric" />
-      <InlineInput label="Новый PIN (4-10 цифр)" value={newPin} onChange={setNewPin} type="password" inputMode="numeric" />
-      <InlineInput label="Повторите новый PIN" value={confirmPin} onChange={setConfirmPin} type="password" inputMode="numeric" />
+      <InlineInput label="Текущий PIN" value={oldPin} onChange={setOldPin} type="password" inputMode="numeric" maxLength={6} />
+      <InlineInput label="Новый PIN (6 цифр)" value={newPin} onChange={setNewPin} type="password" inputMode="numeric" maxLength={6} />
+      <InlineInput label="Повторите новый PIN" value={confirmPin} onChange={setConfirmPin} type="password" inputMode="numeric" maxLength={6} />
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <Button variant="secondary" block onClick={onClose} disabled={busy}>
           Отмена
@@ -649,12 +649,14 @@ function InlineInput({
   onChange,
   type = 'text',
   inputMode,
+  maxLength,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   type?: 'text' | 'password';
   inputMode?: 'numeric' | 'text';
+  maxLength?: number;
 }) {
   return (
     <div style={{ marginBottom: 12 }}>
@@ -673,6 +675,7 @@ function InlineInput({
         type={type}
         inputMode={inputMode}
         value={value}
+        maxLength={maxLength}
         onChange={(e) => onChange(e.target.value)}
         autoComplete="off"
         style={{
