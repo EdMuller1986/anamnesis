@@ -49,7 +49,8 @@ describe('Anamnesis API Integration Tests', () => {
   it('POST /api/auth/login returns error when not configured', async () => {
     const res = await app.fetch(new Request('http://localhost/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ pin: '1234' }),
+      // Must be 6 digits to pass format check before "PIN not configured"
+      body: JSON.stringify({ pin: '123456' }),
       headers: { 'Content-Type': 'application/json' }
     }), {
       ...mockEnv,
@@ -57,7 +58,9 @@ describe('Anamnesis API Integration Tests', () => {
         ...mockDB,
         prepare: () => ({
           bind: () => ({
-            first: () => Promise.resolve(null) // PIN not found
+            first: () => Promise.resolve(null), // PIN not found
+            run: () => Promise.resolve({ success: true }),
+            all: () => Promise.resolve({ results: [] }),
           })
         })
       }
