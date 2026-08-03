@@ -24,7 +24,7 @@ import clsx from 'clsx';
 import { qk } from '@/shared/api/keys';
 import { fetchDashboard } from '@/features/dashboard/api';
 import { haptic } from '@/shared/lib/haptic';
-import { getSession } from '@/shared/auth/session';
+import { openMedicalReportHtml } from '@/shared/lib/export-report';
 import { PatientSwitcher } from './PatientSwitcher';
 
 /**
@@ -103,17 +103,15 @@ export function Sidebar() {
     return location.pathname === item.to;
   };
 
-  const handleExportClick = (e: React.MouseEvent) => {
+  const handleExportClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     haptic('light');
-    const session = getSession();
-    const token = session.sessionToken ?? '';
-    const pid = session.patientId ?? 1;
-    // Relative /api works via Pages _redirects; patient_id required (window.open cannot send X-Patient-Id).
-    window.open(
-      `/api/export/pdf?token=${encodeURIComponent(token)}&patient_id=${pid}`,
-      '_blank'
-    );
+    try {
+      // HTML-отчёт (не PDF): session headers + blob tab — надёжнее window.open(?token=)
+      await openMedicalReportHtml();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Не удалось открыть отчёт');
+    }
   };
 
   return (

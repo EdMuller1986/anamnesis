@@ -96,14 +96,28 @@ exportRoute.get('/pdf', async (c) => {
 
     if (!patient) return c.text('Patient not found', 404);
 
-    const age = calcAge(patient.date_of_birth);
+    // D1 .all() → { results }; tolerate accidental array for tests
+    const asList = (x) => (Array.isArray(x) ? x : (x?.results || []));
+    const diagnosesList = asList(diagnoses);
+    const medicationsList = asList(medications);
+    const timelineList = asList(timeline);
+    const planList = asList(plan);
+    const errorsList = asList(errors);
+    const specialistsList = asList(specialists);
+    const vaccinationsList = asList(vaccinations);
+    const growthList = asList(growth);
+    const labList = asList(labResults);
+
+    const age = calcAge(patient.date_of_birth || patient.birth_date);
     const reportDate = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    const patientName = patient.full_name || patient.name || 'Пациент';
 
     let html = `<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Медицинский отчёт: ${esc(patient.full_name)}</title>
+    <title>Медицинский отчёт: ${esc(patientName)}</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.4; color: #333; max-width: 1000px; margin: 0 auto; padding: 20px; }
         h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 5px; }
@@ -137,8 +151,8 @@ exportRoute.get('/pdf', async (c) => {
     </div>
 
     <div class="patient-info">
-        <div><span class="label">Пациент</span><strong>${esc(patient.full_name)}</strong></div>
-        <div><span class="label">Дата рождения</span>${formatDate(patient.date_of_birth)} (${age})</div>
+        <div><span class="label">Пациент</span><strong>${esc(patientName)}</strong></div>
+        <div><span class="label">Дата рождения</span>${formatDate(patient.date_of_birth || patient.birth_date)} (${age})</div>
         <div><span class="label">Пол</span>${esc(patient.gender)}</div>
         <div><span class="label">Город</span>${esc(patient.city)}</div>
         <div><span class="label">Вес / Рост</span>${patient.current_weight_kg || '—'} кг / ${patient.current_height_cm || '—'} см</div>
@@ -151,7 +165,7 @@ exportRoute.get('/pdf', async (c) => {
     <table>
         <thead><tr><th>Диагноз</th><th>МКБ</th><th>Статус</th><th>Описание</th></tr></thead>
         <tbody>
-        ${diagnoses.results.filter(d => d.status === 'active').map(d => `
+        ${diagnosesList.filter(d => d.status === 'active').map(d => `
             <tr>
                 <td style="width: 25%"><strong>${esc(d.name)}</strong></td>
                 <td style="width: 10%"><code>${esc(d.icd_code)}</code></td>
@@ -166,7 +180,7 @@ exportRoute.get('/pdf', async (c) => {
     <table>
         <thead><tr><th>Препарат</th><th>Дозировка</th><th>Схема</th><th>Статус</th></tr></thead>
         <tbody>
-        ${medications.results.filter(m => m.status === 'active').map(m => `
+        ${medicationsList.filter(m => m.status === 'active').map(m => `
             <tr>
                 <td style="width: 25%"><strong>${esc(m.name)}</strong></td>
                 <td style="width: 20%">${esc(m.dosage)}</td>
@@ -177,16 +191,16 @@ exportRoute.get('/pdf', async (c) => {
         </tbody>
     </table>
 
-    ${plan.results.length > 0 ? `
+    ${planList.length > 0 ? `
     <h2>План лечения и задачи</h2>
     <table>
         <thead><tr><th>Срок</th><th>Приоритет</th><th>Задача</th><th>Статус</th></tr></thead>
         <tbody>
-        ${plan.results.filter(p => p.status !== 'done' && p.status !== 'cancelled').map(p => `
+        ${planList.filter(p => p.status !== 'done' && p.status !== 'cancelled').map(p => `
             <tr>
                 <td style="width: 15%">${formatDate(p.due_date)}</td>
                 <td style="width: 15%"><span class="status-badge ${p.priority === 'urgent' ? 'status-urgent' : ''}">${tr(planPriority, p.priority)}</span></td>
-                <td><strong>${esc(p.title)}</strong>${p.description ? `<br><small>${esc(p.description)}</small>` : ''}</td>
+                <td><strong>${esc(p.title)}</strong>${(p.description || p.detail) ? `<br><small>${esc(p.description || p.detail)}</small>` : ''}</td>
                 <td style="width: 15%">${tr(planStatus, p.status)}</td>
             </tr>
         `).join('')}
@@ -194,16 +208,16 @@ exportRoute.get('/pdf', async (c) => {
     </table>
     ` : ''}
 
-    ${specialists.results.length > 0 ? `
+    ${specialistsList.length > 0 ? `
     <h2>Ваши специалисты</h2>
     <table>
         <thead><tr><th>Специалист</th><th>Специализация</th><th>Статус</th><th>Заметки</th></tr></thead>
         <tbody>
-        ${specialists.results.map(s => `
+        ${specialistsList.map(s => `
             <tr>
                 <td style="width: 25%"><strong>${esc(s.full_name || s.name)}</strong></td>
                 <td style="width: 20%">${esc(s.specialization)}</td>
-                <td style="width: 15%">${esc(s.status) === 'active' ? 'На связи' : 'Архив'}</td>
+                <td style="width: 15%">${esc(s.status) === 'active' || !s.status ? 'На связи' : 'Архив'}</td>
                 <td>${esc(s.notes)}</td>
             </tr>
         `).join('')}
@@ -211,17 +225,17 @@ exportRoute.get('/pdf', async (c) => {
     </table>
     ` : ''}
 
-    ${labResults.results.length > 0 ? `
+    ${labList.length > 0 ? `
     <h2>Последние результаты анализов</h2>
     <table>
         <thead><tr><th>Дата</th><th>Анализ / Параметр</th><th>Результат</th><th>Норма</th><th>Статус</th></tr></thead>
         <tbody>
-        ${labResults.results.slice(0, 20).map(l => `
+        ${labList.slice(0, 20).map(l => `
             <tr>
                 <td style="width: 12%">${formatDate(l.test_date)}</td>
                 <td style="width: 30%"><strong>${esc(l.test_name)}</strong><br><small>${esc(l.parameter)}</small></td>
                 <td style="width: 15%">${esc(l.value)} ${esc(l.unit)}</td>
-                <td style="width: 15%">${l.ref_min !== null ? l.ref_min : ''}${l.ref_max !== null ? ' — ' + l.ref_max : ''} ${esc(l.unit)}</td>
+                <td style="width: 15%">${l.ref_min != null ? l.ref_min : ''}${l.ref_max != null ? ' — ' + l.ref_max : ''} ${esc(l.unit)}</td>
                 <td><span class="status-badge ${l.status === 'critical' ? 'status-urgent' : ''}">${tr(labStatus, l.status)}</span></td>
             </tr>
         `).join('')}
@@ -229,16 +243,16 @@ exportRoute.get('/pdf', async (c) => {
     </table>
     ` : ''}
 
-    ${vaccinations.results.length > 0 ? `
+    ${vaccinationsList.length > 0 ? `
     <h2>Вакцинация</h2>
     <table>
         <thead><tr><th>Дата</th><th>Препарат</th><th>Заболевание</th><th>Статус</th></tr></thead>
         <tbody>
-        ${vaccinations.results.filter(v => v.status === 'done').map(v => `
+        ${vaccinationsList.filter(v => v.status === 'done').map(v => `
             <tr>
-                <td style="width: 15%">${formatDate(v.scheduled_date)}</td>
-                <td style="width: 25%"><strong>${esc(v.vaccine_name)}</strong></td>
-                <td>${esc(v.target_disease)}</td>
+                <td style="width: 15%">${formatDate(v.actual_date || v.scheduled_date)}</td>
+                <td style="width: 25%"><strong>${esc(v.vaccine_name || v.name)}</strong></td>
+                <td>${esc(v.name || v.target_disease)}</td>
                 <td style="width: 15%">${tr(vacStatus, v.status)}</td>
             </tr>
         `).join('')}
@@ -250,7 +264,7 @@ exportRoute.get('/pdf', async (c) => {
     <table>
         <thead><tr><th>Дата</th><th>Событие</th><th>Специалист</th><th>Описание</th></tr></thead>
         <tbody>
-        ${timeline.results.slice(0, 20).map(t => `
+        ${timelineList.slice(0, 20).map(t => `
             <tr>
                 <td style="width: 12%; white-space: nowrap;">${formatDate(t.event_date)}</td>
                 <td style="width: 25%"><strong>${esc(t.title)}</strong><br><small>${tr(timelineCategory, t.category)}</small></td>
@@ -267,7 +281,13 @@ exportRoute.get('/pdf', async (c) => {
 </body>
 </html>`;
 
-    return c.html(html);
+    // Print-friendly HTML (not a binary PDF). Explicit headers for new-tab / blob openers.
+    return c.html(html, 200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Disposition': 'inline; filename="anamnesis-report.html"',
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
   } catch (err) {
     console.error('Export error:', err);
     return c.json({ error: 'Export failed: ' + err.message }, 500);

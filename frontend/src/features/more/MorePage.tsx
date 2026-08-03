@@ -22,7 +22,7 @@ import { useDashboard } from '@/features/dashboard/hooks/useDashboard';
 import { qk } from '@/shared/api/keys';
 import { fetchVersion } from './api';
 import { haptic } from '@/shared/lib/haptic';
-import { getSession } from '@/shared/auth/session';
+import { openMedicalReportHtml } from '@/shared/lib/export-report';
 import { useIsDesktop } from '@/shared/hooks/useMediaQuery';
 
 /**
@@ -74,15 +74,15 @@ export function MorePage() {
     return <Outlet />;
   }
 
-  const handleClick = (item: MenuItem) => {
+  const handleClick = async (item: MenuItem) => {
     haptic('light');
     if (item.action === 'export') {
-      const session = getSession();
-      const token = session.sessionToken ?? '';
-      const pid = session.patientId ?? 1;
-      // VITE_API_URL already includes /api (e.g. https://worker.../api); avoid /api/api/...
-      const baseUrl = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
-      window.open(`${baseUrl}/export/pdf?token=${encodeURIComponent(token)}&patient_id=${pid}`, '_blank');
+      try {
+        // HTML-отчёт (не PDF): fetch + blob, без token в URL
+        await openMedicalReportHtml();
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : 'Не удалось открыть отчёт');
+      }
       return;
     }
     navigate(item.target);

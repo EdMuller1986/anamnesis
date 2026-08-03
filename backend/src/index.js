@@ -83,13 +83,20 @@ const getMeta = (c) => {
  * Invalid header → 400; unknown patient → 404.
  */
 async function resolvePatientId(c, { fallbackPatientId = 1, requireExists = true } = {}) {
+  // Prefer explicit chart: header (SPA) → query (export tab / print) → session fallback
   const headerRaw = c.req.header('x-patient-id');
+  const queryRaw = c.req.query('patient_id');
   let patientId;
 
   if (headerRaw != null && String(headerRaw).trim() !== '') {
     patientId = parseInt(headerRaw, 10);
     if (isNaN(patientId) || patientId <= 0) {
       return { error: c.json({ error: 'Invalid X-Patient-Id' }, 400) };
+    }
+  } else if (queryRaw != null && String(queryRaw).trim() !== '') {
+    patientId = parseInt(queryRaw, 10);
+    if (isNaN(patientId) || patientId <= 0) {
+      return { error: c.json({ error: 'Invalid patient_id' }, 400) };
     }
   } else {
     patientId = parseInt(fallbackPatientId, 10);
