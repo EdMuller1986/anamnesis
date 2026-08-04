@@ -86,6 +86,27 @@ For local development:
 - **Restore from backup** is re-enabled with guards (unwrap + refuse empty wipe). It restores **JSON metadata only** (not B2 file bytes). Auto-restore in CI remains off.
 - CI runs `wrangler d1 migrations apply anamnesis-db --remote` **before** Worker deploy
 
+## Migrating data from old SQLite (VPS)
+
+There is still no fully automated SQLite+uploads → D1+B2 migrator. Partial path:
+
+```bash
+# 1) Export tables to JSON (metadata only)
+node backend/scripts/export-sqlite-for-import.mjs /path/to/old.db --patient 1 > import.json
+
+# 2) Upload files from old backend/uploads to B2 using the same object keys as documents.file_path
+
+# 3) Import into D1 (admin token)
+curl -X POST "$WORKER/api/admin/import" \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -H "X-Patient-Id: 1" \
+  -H "Content-Type: application/json" \
+  -d @import.json
+```
+
+Admin helpers: `GET /api/admin/tools/auth-log`, `GET /api/admin/tools/schema-info`.  
+Admin SQL writes require `"allow_write": true` and are rate-limited.
+
 ## Multi-patient (family mode)
 
 After login, the active chart is selected with:

@@ -49,3 +49,26 @@ describe('backup B2 manifest', () => {
     ].sort());
   });
 });
+
+describe('backup getFullState ORDER BY', () => {
+  it('does not ORDER visit_diagnoses by id (no such column)', async () => {
+    const { getFullState } = await import('./services/backup.js');
+    const queries = [];
+    const db = {
+      prepare: (sql) => {
+        queries.push(sql);
+        return {
+          all: async () => ({ results: [] }),
+          first: async () => null,
+        };
+      },
+    };
+    await getFullState(db);
+    const vd = queries.find((q) => q.includes('FROM visit_diagnoses'));
+    expect(vd).toBeTruthy();
+    expect(vd).toMatch(/ORDER BY visit_id, diagnosis_id/);
+    expect(vd).not.toMatch(/ORDER BY id\s*$/);
+    const settings = queries.find((q) => q.includes('FROM app_settings'));
+    expect(settings).toMatch(/ORDER BY key/);
+  });
+});

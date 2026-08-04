@@ -1,12 +1,26 @@
 import * as telegram from './telegram';
 import * as b2 from './b2-storage';
 
+// Table → ORDER BY clause (visit_diagnoses has no id — composite PK)
 const PER_PATIENT_TABLES = [
-  'diagnoses', 'medications', 'specialists',
-  'medical_errors', 'plan', 'timeline', 'documents',
-  'reminders', 'comments', 'vaccinations', 'growth_log',
-  'lab_results', 'prescriptions', 'ai_requests', 'visit_diagnoses',
+  { name: 'diagnoses', orderBy: 'id' },
+  { name: 'medications', orderBy: 'id' },
+  { name: 'specialists', orderBy: 'id' },
+  { name: 'medical_errors', orderBy: 'id' },
+  { name: 'plan', orderBy: 'id' },
+  { name: 'timeline', orderBy: 'id' },
+  { name: 'documents', orderBy: 'id' },
+  { name: 'reminders', orderBy: 'id' },
+  { name: 'comments', orderBy: 'id' },
+  { name: 'vaccinations', orderBy: 'id' },
+  { name: 'growth_log', orderBy: 'id' },
+  { name: 'lab_results', orderBy: 'id' },
+  { name: 'prescriptions', orderBy: 'id' },
+  { name: 'ai_requests', orderBy: 'id' },
+  { name: 'visit_diagnoses', orderBy: 'visit_id, diagnosis_id' },
 ];
+
+const PER_PATIENT_TABLE_NAMES = PER_PATIENT_TABLES.map((t) => t.name);
 
 /**
  * Canonical payload for hashing / restore (no volatile exported_at).
@@ -23,7 +37,7 @@ export function unwrapBackupState(raw) {
   if (!raw || typeof raw !== 'object') return raw;
   if (raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)) {
     const nested = raw.data;
-    const looksLikeTables = PER_PATIENT_TABLES.some((t) => Array.isArray(nested[t]))
+    const looksLikeTables = PER_PATIENT_TABLE_NAMES.some((t) => Array.isArray(nested[t]))
       || Array.isArray(nested.patient)
       || Array.isArray(nested.app_settings);
     if (looksLikeTables) {
@@ -184,17 +198,17 @@ export async function getFullState(db) {
   const patients = (await db.prepare('SELECT * FROM patient ORDER BY id').all()).results || [];
   results.patient = patients;
 
-  const perPatientQueries = PER_PATIENT_TABLES.map((t) =>
-    db.prepare(`SELECT * FROM ${t} ORDER BY id`).all()
+  const perPatientQueries = PER_PATIENT_TABLES.map(({ name, orderBy }) =>
+    db.prepare(`SELECT * FROM ${name} ORDER BY ${orderBy}`).all()
   );
   const perPatientRows = await Promise.all(perPatientQueries);
-  PER_PATIENT_TABLES.forEach((t, i) => {
-    results[t] = perPatientRows[i].results || [];
+  PER_PATIENT_TABLES.forEach(({ name }, i) => {
+    results[name] = perPatientRows[i].results || [];
   });
 
-  for (const t of ['app_settings', 'app_versions']) {
-    results[t] = (await db.prepare(`SELECT * FROM ${t}`).all()).results || [];
-  }
+  // app_settings PK is `key`, not id
+  results.app_settings = (await db.prepare('SELECT * FROM app_settings ORDER BY key').all()).results || [];
+  results.app_versions = (await db.prepare('SELECT * FROM app_versions ORDER BY id').all()).results || [];
 
   // B2 object manifest (keys only — bytes stay in bucket; full DR needs bucket intact)
   results.b2_file_manifest = buildB2FileManifest(results);

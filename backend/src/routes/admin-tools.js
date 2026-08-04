@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import * as backup from '../services/backup';
 import { applyImport } from './admin';
+import { checkRateLimit, clientRateKey } from '../services/rate-limit';
 
 const adminTools = new Hono();
 
@@ -76,20 +77,105 @@ adminTools.get('/orphan-check', async (c) => {
   });
 });
 
-// POST /api/admin/tools/sql
+// POST /api/admin/tools/sql — tight rate limit; block dangerous multi-statement / write without allow
 adminTools.post('/sql', async (c) => {
-  const { sql, params = [] } = await c.req.json();
-  if (/\b(PRAGMA|ATTACH|DETACH|LOAD_EXTENSION)\b/i.test(sql)) return c.json({ error: 'forbidden' }, 403);
+  const rl = await checkRateLimit(c.env.DB, clientRateKey(c, 'admin-sql'), {
+    windowSec: 60,
+    max: 20,
+  });
+  if (!rl.allowed) {
+    c.header('Retry-After', String(rl.retryAfterSec || 60));
+    return c.json({ error: 'Too many SQL requests', retry_after_sec: rl.retryAfterSec }, 429);
+  }
+
+  const { sql, params = [], allow_write = false } = await c.req.json();
+  if (!sql || typeof sql !== 'string') return c.json({ error: 'sql required' }, 400);
+  if (/\b(PRAGMA|ATTACH|DETACH|LOAD_EXTENSION|VACUUM)\b/i.test(sql)) {
+    return c.json({ error: 'forbidden statement' }, 403);
+  }
+  // Single statement only
+  const stripped = sql.replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '').trim();
+  if (stripped.includes(';') && stripped.replace(/;+\s*$/, '').includes(';')) {
+    return c.json({ error: 'multiple statements not allowed' }, 400);
+  }
+
+  const upper = stripped.toUpperCase();
+  const isSelect = upper.startsWith('SELECT') || upper.startsWith('WITH');
+  if (!isSelect && !allow_write) {
+    return c.json({ error: 'writes require allow_write: true' }, 403);
+  }
+  if (!isSelect && /\b(DROP|ALTER|CREATE)\b/i.test(upper)) {
+    return c.json({ error: 'DDL not allowed via admin SQL' }, 403);
+  }
+
   try {
-    const isSelect = sql.trim().toUpperCase().startsWith('SELECT');
     if (isSelect) {
-      const { results } = await c.env.DB.prepare(sql).bind(...params).all();
+      const { results } = await c.env.DB.prepare(sql).bind(...(params || [])).all();
       return c.json({ rows: results, count: results.length });
-    } else {
-      const result = await c.env.DB.prepare(sql).bind(...params).run();
-      return c.json({ changes: result.meta.changes });
     }
-  } catch (e) { return c.json({ error: e.message }, 400); }
+    const result = await c.env.DB.prepare(sql).bind(...(params || [])).run();
+    return c.json({ changes: result.meta?.changes ?? result.changes ?? 0 });
+  } catch (e) {
+    return c.json({ error: e.message }, 400);
+  }
+});
+
+// GET /api/admin/tools/auth-log
+adminTools.get('/auth-log', async (c) => {
+  const limit = Math.min(parseInt(c.req.query('limit') || '50', 10) || 50, 200);
+  const event = c.req.query('event');
+  try {
+    let q = 'SELECT * FROM auth_log';
+    const params = [];
+    if (event) {
+      q += ' WHERE event = ?';
+      params.push(event);
+    }
+    q += ' ORDER BY id DESC LIMIT ?';
+    params.push(limit);
+    const { results } = await c.env.DB.prepare(q).bind(...params).all();
+    return c.json(results || []);
+  } catch (e) {
+    return c.json({ error: e.message, rows: [] }, 500);
+  }
+});
+
+// GET /api/admin/tools/schema-info — quick health of migrations / key tables
+adminTools.get('/schema-info', async (c) => {
+  const db = c.env.DB;
+  const tables = [];
+  try {
+    const { results } = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ).all();
+    for (const row of results || []) tables.push(row.name);
+  } catch (e) {
+    return c.json({ error: e.message }, 500);
+  }
+
+  let d1Migrations = [];
+  try {
+    const { results } = await db.prepare(
+      'SELECT id, name, applied_at FROM d1_migrations ORDER BY id'
+    ).all();
+    d1Migrations = results || [];
+  } catch {
+    // table name may differ or not exist locally
+  }
+
+  const expected = [
+    'patient', 'timeline', 'documents', 'diagnoses', 'medications',
+    'sessions', 'auth_log', 'rate_limits', 'app_versions',
+  ];
+  const missing = expected.filter((t) => !tables.includes(t));
+
+  return c.json({
+    table_count: tables.length,
+    tables,
+    missing_expected: missing,
+    d1_migrations: d1Migrations,
+    ok: missing.length === 0,
+  });
 });
 
 // GET /api/admin/tools/search
