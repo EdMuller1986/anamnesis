@@ -26,7 +26,22 @@ const PER_PATIENT_TABLE_NAMES = PER_PATIENT_TABLES.map((t) => t.name);
  * Canonical payload for hashing / restore (no volatile exported_at).
  */
 export function stableBackupPayload(state) {
-  const { exported_at, ...rest } = state || {};
+  // Drop volatile fields so unchanged medical data keeps the same hash
+  if (!state || typeof state !== 'object') return state;
+  const { exported_at, backup_errors, notes, ...rest } = state;
+  if (rest.data && typeof rest.data === 'object') {
+    const { b2_file_manifest, ...dataRest } = rest.data;
+    // Keep manifest structure but sort keys for stable hash
+    const manifest = b2_file_manifest
+      ? {
+          count: b2_file_manifest.count,
+          files: [...(b2_file_manifest.files || [])].sort((a, b) =>
+            String(a.key).localeCompare(String(b.key))
+          ),
+        }
+      : undefined;
+    return { ...rest, data: { ...dataRest, b2_file_manifest: manifest } };
+  }
   return rest;
 }
 
@@ -67,18 +82,27 @@ export async function runBackup(env) {
     return;
   }
 
-  try {
+try {
     const data = await getFullState(env.DB);
+    if (data.backup_errors?.length) {
+      console.warn('[Backup] partial table errors:', data.backup_errors);
+    }
+
+    // Dedup must ignore volatile fields (exported_at) and transient error notes
     const stableJson = JSON.stringify(stableBackupPayload(data));
     const fullJson = JSON.stringify(data);
 
-    // Dedup on stable payload (ignores exported_at)
     const newHash = await computeHash(stableJson);
-    const lastHash = await env.DB.prepare("SELECT value FROM app_settings WHERE key = 'last_backup_hash'").first();
+    let lastHash = null;
+    try {
+      lastHash = await env.DB.prepare("SELECT value FROM app_settings WHERE key = 'last_backup_hash'").first();
+    } catch (e) {
+      console.warn('[Backup] could not read last_backup_hash:', e.message);
+    }
 
     if (lastHash && lastHash.value === newHash) {
       console.log('[Backup] No changes detected, skipping backup');
-      return;
+      return { ok: true, skipped: true, reason: 'unchanged' };
     }
 
     const dateStr = new Date().toISOString().slice(0, 10);
@@ -91,23 +115,40 @@ export async function runBackup(env) {
     await b2.uploadFile(env, 'system/latest-backup.json.gz.enc', encrypted, 'application/octet-stream');
     await b2.uploadFile(env, fileName, encrypted, 'application/octet-stream');
 
+    const sizeMb = (encrypted.byteLength / 1024 / 1024).toFixed(3);
+    const warn = data.backup_errors?.length
+      ? `\n⚠️ partial: ${data.backup_errors.length} table error(s)`
+      : '';
+    const caption = `<b>[DAILY BACKUP]</b> ${dateStr} (${sizeMb} MB)${warn}`;
+
     try {
-      const sizeMb = (encrypted.byteLength / 1024 / 1024).toFixed(3);
-      const caption = `<b>[DAILY BACKUP]</b> ${dateStr} (${sizeMb} MB)`;
-      await telegram.sendDocument(env, encrypted, `anamnesis-backup-${dateStr}.json.gz.enc`, caption);
+      const tg = await telegram.sendDocument(env, encrypted, `anamnesis-backup-${dateStr}.json.gz.enc`, caption);
+      if (!tg.ok) {
+        console.error('[Backup] Telegram sendDocument failed (B2 already saved):', tg);
+        await telegram.sendMessage(
+          env,
+          `<b>[BACKUP]</b> Saved to B2 but Telegram document failed: <code>${tg.reason || 'unknown'}</code>`
+        );
+      }
     } catch (tgErr) {
       console.error('[Backup] Telegram send failed (B2 already saved):', tgErr);
     }
 
-    await env.DB.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_backup_hash', ?)")
-      .bind(newHash).run();
+    try {
+      await env.DB.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_backup_hash', ?)")
+        .bind(newHash).run();
+    } catch (e) {
+      console.warn('[Backup] could not store last_backup_hash:', e.message);
+    }
 
     await rotateBackups(env);
 
     console.log(`[Backup] Successfully saved to B2: ${fileName}`);
+    return { ok: true, fileName, partial_errors: data.backup_errors || [] };
   } catch (err) {
     console.error('[Backup] Error:', err);
     await telegram.sendMessage(env, `<b>[CRITICAL] Daily backup failed</b>\n\n<code>${err.message}</code>`);
+    return { ok: false, error: err.message };
   }
 }
 
@@ -190,34 +231,64 @@ async function decompressData(data) {
 }
 
 /**
+ * Safe SELECT for backup: never throws for missing table/column — logs and returns [].
+ */
+async function selectAll(db, sql, tableLabel) {
+  try {
+    const res = await db.prepare(sql).all();
+    return { rows: res?.results || [], error: null };
+  } catch (e) {
+    console.error(`[Backup] skip table ${tableLabel}:`, e.message);
+    return { rows: [], error: `${tableLabel}: ${e.message}` };
+  }
+}
+
+/**
  * Собирает данные всех пациентов + глобальные таблицы.
+ * Per-table isolation: one bad table must not abort the whole nightly backup.
  */
 export async function getFullState(db) {
   const results = {};
+  const errors = [];
 
-  const patients = (await db.prepare('SELECT * FROM patient ORDER BY id').all()).results || [];
-  results.patient = patients;
+  {
+    const { rows, error } = await selectAll(db, 'SELECT * FROM patient ORDER BY id', 'patient');
+    results.patient = rows;
+    if (error) errors.push(error);
+  }
 
-  const perPatientQueries = PER_PATIENT_TABLES.map(({ name, orderBy }) =>
-    db.prepare(`SELECT * FROM ${name} ORDER BY ${orderBy}`).all()
-  );
-  const perPatientRows = await Promise.all(perPatientQueries);
-  PER_PATIENT_TABLES.forEach(({ name }, i) => {
-    results[name] = perPatientRows[i].results || [];
-  });
+  // Sequential is fine for nightly cron; avoids D1 batch storms and surfaces which table fails
+  for (const { name, orderBy } of PER_PATIENT_TABLES) {
+    const { rows, error } = await selectAll(
+      db,
+      `SELECT * FROM ${name} ORDER BY ${orderBy}`,
+      name
+    );
+    results[name] = rows;
+    if (error) errors.push(error);
+  }
 
   // app_settings PK is `key`, not id
-  results.app_settings = (await db.prepare('SELECT * FROM app_settings ORDER BY key').all()).results || [];
-  results.app_versions = (await db.prepare('SELECT * FROM app_versions ORDER BY id').all()).results || [];
+  {
+    const { rows, error } = await selectAll(db, 'SELECT * FROM app_settings ORDER BY key', 'app_settings');
+    results.app_settings = rows;
+    if (error) errors.push(error);
+  }
+  {
+    const { rows, error } = await selectAll(db, 'SELECT * FROM app_versions ORDER BY id', 'app_versions');
+    results.app_versions = rows;
+    if (error) errors.push(error);
+  }
 
   // B2 object manifest (keys only — bytes stay in bucket; full DR needs bucket intact)
   results.b2_file_manifest = buildB2FileManifest(results);
 
   return {
-    version: '2.2.0',
+    version: '2.2.1',
     exported_at: new Date().toISOString(),
     scope: 'all_patients',
     data: results,
+    backup_errors: errors.length ? errors : undefined,
     notes: {
       b2_files: 'manifest lists object keys from documents/vaccinations; file bytes are NOT embedded. Keep B2 bucket or copy keys separately.',
     },

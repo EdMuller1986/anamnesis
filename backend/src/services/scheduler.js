@@ -18,19 +18,24 @@ export async function checkReminders(env) {
     console.log(`[Scheduler] Найдено напоминаний: ${results.length}`);
 
     for (const reminder of results) {
-      // 2. Отправляем уведомление в Telegram
-      const text = `🔔 <b>Напоминание</b>\n\n${reminder.title}`;
-      
-      // Мы предполагаем, что бот настроен на владельца. 
-      // В будущем можно добавить поиск TELEGRAM_CHAT_ID для конкретного patient_id в таблице настроек.
+      const body = reminder.message
+        ? `${reminder.title}\n\n${reminder.message}`
+        : reminder.title;
+      const text = `🔔 <b>Напоминание</b>\n\n${body}`;
+
       const res = await telegram.sendMessage(env, text);
 
       if (res.ok) {
-        // 3. Помечаем как выполненное
-        await db.prepare(
-          "UPDATE reminders SET status = 'done' WHERE id = ?"
-        ).bind(reminder.id).run();
-        
+        try {
+          await db.prepare(
+            "UPDATE reminders SET status = 'done', sent_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
+          ).bind(reminder.id).run();
+        } catch {
+          // sent_at/updated_at may be missing on older DBs
+          await db.prepare(
+            "UPDATE reminders SET status = 'done' WHERE id = ?"
+          ).bind(reminder.id).run();
+        }
         console.log(`[Scheduler] Напоминание #${reminder.id} успешно отправлено`);
       } else {
         console.error(`[Scheduler] Ошибка отправки напоминания #${reminder.id}:`, res.reason);
