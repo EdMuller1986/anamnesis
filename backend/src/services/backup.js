@@ -102,7 +102,17 @@ try {
 
     if (lastHash && lastHash.value === newHash) {
       console.log('[Backup] No changes detected, skipping backup');
-      return { ok: true, skipped: true, reason: 'unchanged' };
+      const skipped = {
+        ok: true,
+        skipped: true,
+        reason: 'unchanged',
+        at: new Date().toISOString(),
+      };
+      try {
+        await env.DB.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_backup_status', ?)")
+          .bind(JSON.stringify(skipped)).run();
+      } catch { /* ignore */ }
+      return skipped;
     }
 
     const dateStr = new Date().toISOString().slice(0, 10);
@@ -141,12 +151,36 @@ try {
       console.warn('[Backup] could not store last_backup_hash:', e.message);
     }
 
+    const status = {
+      ok: true,
+      at: new Date().toISOString(),
+      fileName,
+      size_bytes: encrypted.byteLength,
+      partial_errors: data.backup_errors || [],
+      patient_count: data.data?.patient?.length ?? null,
+      manifest_files: data.data?.b2_file_manifest?.count ?? null,
+    };
+    try {
+      await env.DB.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_backup_status', ?)")
+        .bind(JSON.stringify(status)).run();
+    } catch (e) {
+      console.warn('[Backup] could not store last_backup_status:', e.message);
+    }
+
     await rotateBackups(env);
 
     console.log(`[Backup] Successfully saved to B2: ${fileName}`);
-    return { ok: true, fileName, partial_errors: data.backup_errors || [] };
+    return status;
   } catch (err) {
     console.error('[Backup] Error:', err);
+    try {
+      await env.DB.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_backup_status', ?)")
+        .bind(JSON.stringify({
+          ok: false,
+          at: new Date().toISOString(),
+          error: err.message,
+        })).run();
+    } catch { /* ignore */ }
     await telegram.sendMessage(env, `<b>[CRITICAL] Daily backup failed</b>\n\n<code>${err.message}</code>`);
     return { ok: false, error: err.message };
   }

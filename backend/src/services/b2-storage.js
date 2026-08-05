@@ -107,17 +107,33 @@ export async function deleteFile(env, fileName) {
 }
 
 export async function listFiles(env, prefix) {
+  // Paginated list (single-prefix). Prefer listAllFiles for full bucket scans.
   const client = getS3Client(env);
   const command = new ListObjectsV2Command({
     Bucket: env.B2_BUCKET_NAME,
-    Prefix: prefix,
+    Prefix: prefix || '',
+    MaxKeys: 1000,
   });
-  
-  // Примечание: В Cloudflare Workers ListObjectsV2 может вызвать ошибку DOMParser 
-  // при использовании стандартного client.send(). 
-  // Для надежности используем тот же подход с fetch или пробуем send().
-  // Поскольку нам нужен парсинг XML ответа, а DOMParser нет, 
-  // используем встроенный S3 клиент и надеемся на совместимость в этой версии.
   const response = await client.send(command);
   return response.Contents || [];
+}
+
+/**
+ * List all objects under prefix (handles ContinuationToken pagination).
+ */
+export async function listAllFiles(env, prefix = '') {
+  const client = getS3Client(env);
+  const out = [];
+  let ContinuationToken;
+  do {
+    const response = await client.send(new ListObjectsV2Command({
+      Bucket: env.B2_BUCKET_NAME,
+      Prefix: prefix,
+      ContinuationToken,
+      MaxKeys: 1000,
+    }));
+    if (response.Contents?.length) out.push(...response.Contents);
+    ContinuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+  } while (ContinuationToken);
+  return out;
 }

@@ -94,7 +94,12 @@ There is still no fully automated SQLite+uploads → D1+B2 migrator. Partial pat
 # 1) Export tables to JSON (metadata only)
 node backend/scripts/export-sqlite-for-import.mjs /path/to/old.db --patient 1 > import.json
 
-# 2) Upload files from old backend/uploads to B2 using the same object keys as documents.file_path
+# 2) Upload files from old backend/uploads to B2
+export B2_ENDPOINT=... B2_BUCKET_NAME=... B2_KEY_ID=... B2_APPLICATION_KEY=...
+# If D1 stores only UUID.ext keys (this fork):
+node backend/scripts/upload-uploads-to-b2.mjs /path/to/uploads --basename-only
+# Or preserve relative paths:
+# node backend/scripts/upload-uploads-to-b2.mjs /path/to/uploads
 
 # 3) Import into D1 (admin token)
 curl -X POST "$WORKER/api/admin/import" \
@@ -104,7 +109,12 @@ curl -X POST "$WORKER/api/admin/import" \
   -d @import.json
 ```
 
-Admin helpers: `GET /api/admin/tools/auth-log`, `GET /api/admin/tools/schema-info`.  
+Admin helpers:
+- `GET /api/admin/tools/auth-log`
+- `GET /api/admin/tools/schema-info`
+- `GET /api/admin/tools/backup-status` — last cron/manual backup
+- `GET /api/admin/tools/orphan-check?include_b2=1` — DB vs B2 key comparison  
+
 Admin SQL writes require `"allow_write": true` and are rate-limited.
 
 ## Multi-patient (family mode)

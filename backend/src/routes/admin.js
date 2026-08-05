@@ -139,16 +139,56 @@ export async function applyImport(db, rawBody, pid) {
   }
 
   if (wipe) {
+    // visit_diagnoses first (FK-ish), then dependents
     const tablesToWipe = [
-      'timeline', 'documents', 'diagnoses', 'medications',
+      'visit_diagnoses', 'prescriptions', 'comments', 'documents',
+      'timeline', 'diagnoses', 'medications',
       'specialists', 'lab_results', 'vaccinations', 'growth_log',
-      'plan', 'medical_errors', 'reminders', 'prescriptions',
-      'ai_requests', 'visit_diagnoses', 'comments',
+      'plan', 'medical_errors', 'reminders',
+      'ai_requests',
     ];
     for (const t of tablesToWipe) {
       batch.push(db.prepare(`DELETE FROM ${t} WHERE patient_id = ?`).bind(pid));
     }
     changeLog.push('Wiped existing patient-scoped data for full restore');
+  }
+
+  // 0. Patient profile (upsert active chart)
+  const patientRows = Array.isArray(data.patient)
+    ? data.patient
+    : (data.patient && typeof data.patient === 'object' ? [data.patient] : []);
+  for (const p of patientRows) {
+    const id = p.id || pid;
+    if (Number(id) !== Number(pid) && !wipe) continue;
+    const fullName = p.full_name || p.name;
+    const dob = p.date_of_birth || p.birth_date;
+    if (!fullName) continue;
+    batch.push(db.prepare(`
+      INSERT INTO patient (id, name, full_name, birth_date, date_of_birth, gender, city, allergies,
+        current_height_cm, current_weight_kg, birth_weight_g, notes, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        full_name = excluded.full_name,
+        birth_date = excluded.birth_date,
+        date_of_birth = excluded.date_of_birth,
+        gender = excluded.gender,
+        city = excluded.city,
+        allergies = excluded.allergies,
+        current_height_cm = excluded.current_height_cm,
+        current_weight_kg = excluded.current_weight_kg,
+        birth_weight_g = excluded.birth_weight_g,
+        notes = excluded.notes,
+        updated_at = datetime('now')
+    `).bind(
+      id,
+      fullName, fullName,
+      dob || null, dob || null,
+      p.gender || null, p.city || null, p.allergies || null,
+      p.current_height_cm ?? null, p.current_weight_kg ?? null, p.birth_weight_g ?? null,
+      p.notes || null
+    ));
+    changeLog.push(`Upserted patient #${id}: ${fullName}`);
   }
 
   // 1. Timeline

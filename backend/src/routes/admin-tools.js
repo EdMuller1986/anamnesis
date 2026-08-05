@@ -62,19 +62,89 @@ adminTools.get('/integrity', async (c) => {
 });
 
 // GET /api/admin/tools/orphan-check
+// ?include_b2=1 — also compare document/vaccination keys vs B2 listing (slower)
 adminTools.get('/orphan-check', async (c) => {
   const pid = c.get('patientId') || 1;
+  const includeB2 = c.req.query('include_b2') === '1' || c.req.query('include_b2') === 'true';
+
   const results = await Promise.all([
     c.env.DB.prepare('SELECT p.id, p.medication_id FROM prescriptions p LEFT JOIN medications m ON m.id = p.medication_id WHERE p.patient_id = ? AND p.medication_id IS NOT NULL AND m.id IS NULL').bind(pid).all(),
     c.env.DB.prepare('SELECT id, title FROM documents WHERE patient_id = ? AND timeline_id IS NULL AND (source_doctor IS NULL OR source_doctor = "")').bind(pid).all(),
     c.env.DB.prepare('SELECT m.id, m.name FROM medications m WHERE m.patient_id = ? AND NOT EXISTS (SELECT 1 FROM prescriptions p WHERE p.medication_id = m.id)').bind(pid).all()
   ]);
 
-  return c.json({
+  const payload = {
     dead_fk: results[0].results,
     orphan_docs: results[1].results,
-    orphan_meds: results[2].results
-  });
+    orphan_meds: results[2].results,
+  };
+
+  if (includeB2) {
+    try {
+      const b2mod = await import('../services/b2-storage.js');
+      const { results: docs } = await c.env.DB.prepare(
+        'SELECT id, file_path FROM documents WHERE patient_id = ? AND file_path IS NOT NULL'
+      ).bind(pid).all();
+      const { results: vacs } = await c.env.DB.prepare(
+        'SELECT id, photos FROM vaccinations WHERE patient_id = ?'
+      ).bind(pid).all();
+
+      const dbKeys = new Set();
+      for (const d of docs || []) if (d.file_path) dbKeys.add(d.file_path);
+      for (const v of vacs || []) {
+        try {
+          for (const p of JSON.parse(v.photos || '[]')) {
+            if (p) dbKeys.add(String(p).replace(/^\/api\/vaccinations\/photos\//, ''));
+          }
+        } catch { /* skip */ }
+      }
+
+      // List non-system prefixes (documents often root UUID keys; photos under vaccinations/)
+      const listed = await b2mod.listAllFiles(c.env, '');
+      const b2Keys = new Set(
+        (listed || [])
+          .map((o) => o.Key)
+          .filter((k) => k && !k.startsWith('backups/') && !k.startsWith('system/'))
+      );
+
+      const missing_in_b2 = [...dbKeys].filter((k) => !b2Keys.has(k));
+      const orphan_in_b2 = [...b2Keys].filter((k) => !dbKeys.has(k)).slice(0, 200);
+
+      payload.b2 = {
+        db_keys: dbKeys.size,
+        b2_keys: b2Keys.size,
+        missing_in_b2,
+        orphan_in_b2_sample: orphan_in_b2,
+        orphan_in_b2_truncated: orphan_in_b2.length >= 200,
+      };
+    } catch (e) {
+      payload.b2 = { error: e.message };
+    }
+  }
+
+  return c.json(payload);
+});
+
+// GET /api/admin/tools/backup-status — last cron/manual backup outcome
+adminTools.get('/backup-status', async (c) => {
+  try {
+    const row = await c.env.DB.prepare(
+      "SELECT value FROM app_settings WHERE key = 'last_backup_status'"
+    ).first();
+    const hash = await c.env.DB.prepare(
+      "SELECT value FROM app_settings WHERE key = 'last_backup_hash'"
+    ).first();
+    let status = null;
+    if (row?.value) {
+      try { status = JSON.parse(row.value); } catch { status = { raw: row.value }; }
+    }
+    return c.json({
+      last_backup_status: status,
+      last_backup_hash: hash?.value || null,
+    });
+  } catch (e) {
+    return c.json({ error: e.message }, 500);
+  }
 });
 
 // POST /api/admin/tools/sql — tight rate limit; block dangerous multi-statement / write without allow
@@ -326,9 +396,17 @@ adminTools.get('/changelog', async (c) => {
 
 // POST /api/admin/tools/backup-now
 adminTools.post('/backup-now', async (c) => {
-  // Выполняем в фоне, чтобы не ждать долго ответа
-  c.executionCtx.waitUntil(backup.runBackup(c.env));
-  return c.json({ ok: true, message: 'Backup task started in background' });
+  // Prefer await for manual trigger so client gets real result; fall back to background
+  if (c.req.query('wait') === '1' || c.req.query('wait') === 'true') {
+    const result = await backup.runBackup(c.env);
+    return c.json(result);
+  }
+  if (c.executionCtx?.waitUntil) {
+    c.executionCtx.waitUntil(backup.runBackup(c.env));
+    return c.json({ ok: true, message: 'Backup task started in background' });
+  }
+  const result = await backup.runBackup(c.env);
+  return c.json(result);
 });
 
 // POST /api/admin/tools/restore-from-backup
