@@ -40,13 +40,19 @@ auth.post('/login', async (c) => {
     
     let storedHash = await db.prepare('SELECT value FROM app_settings WHERE key = ?').bind(`pin_hash_${patientId}`).first('value');
 
-    // Bootstrap: seed PIN hash from APP_PIN secret/env on first login (fresh install)
+    // Bootstrap: seed PIN hash from APP_PIN secret/env on first login (fresh install).
+    // Only for patient 1 by default — family charts inherit via switcher, not separate PIN seeds.
     if (!storedHash) {
       const appPin = c.env.APP_PIN;
-      if (appPin) {
+      const allowBootstrap = Number(patientId) === 1 || c.env.APP_PIN_ALL_PATIENTS === 'true';
+      if (appPin && allowBootstrap) {
+        if (!authSession.isValidPin(String(appPin))) {
+          return c.json({ error: 'APP_PIN must be exactly 6 digits' }, 500);
+        }
         storedHash = await authSession.hashPin(String(appPin));
         await db.prepare('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)')
           .bind(`pin_hash_${patientId}`, storedHash).run();
+        await authSession.logAuthEvent(db, { patientId, event: 'pin_bootstrap', ip, deviceId });
       } else {
         return c.json({ error: 'PIN not configured' }, 500);
       }

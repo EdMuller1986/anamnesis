@@ -5,6 +5,27 @@ import { checkRateLimit, clientRateKey } from '../services/rate-limit';
 
 const adminTools = new Hono();
 
+// GET /api/admin/tools — catalog of available tools
+adminTools.get('/', async (c) => {
+  return c.json({
+    tools: [
+      { method: 'GET', path: '/integrity' },
+      { method: 'GET', path: '/orphan-check', query: 'include_b2=1' },
+      { method: 'GET', path: '/schema-info' },
+      { method: 'GET', path: '/auth-log' },
+      { method: 'GET', path: '/backup-status' },
+      { method: 'GET', path: '/backups' },
+      { method: 'POST', path: '/backup-now', query: 'wait=1' },
+      { method: 'POST', path: '/restore-from-backup', query: 'dry_run=1' },
+      { method: 'POST', path: '/sql', body: '{ sql, params?, allow_write? }' },
+      { method: 'GET', path: '/search?q=' },
+      { method: 'GET', path: '/ai-review' },
+      { method: 'GET', path: '/changelog' },
+      { method: 'GET', path: '/impact?type=&id=' },
+    ],
+  });
+});
+
 // GET /api/admin/tools/integrity
 adminTools.get('/integrity', async (c) => {
   const db = c.env.DB;
@@ -394,6 +415,24 @@ adminTools.get('/changelog', async (c) => {
   return c.json(results);
 });
 
+// GET /api/admin/tools/backups — list encrypted backups in B2
+adminTools.get('/backups', async (c) => {
+  try {
+    const b2mod = await import('../services/b2-storage.js');
+    const files = await b2mod.listAllFiles(c.env, 'backups/');
+    const list = (files || [])
+      .map((f) => ({
+        key: f.Key,
+        size: f.Size,
+        last_modified: f.LastModified,
+      }))
+      .sort((a, b) => String(b.last_modified).localeCompare(String(a.last_modified)));
+    return c.json({ count: list.length, backups: list });
+  } catch (e) {
+    return c.json({ error: e.message, backups: [] }, 500);
+  }
+});
+
 // POST /api/admin/tools/backup-now
 adminTools.post('/backup-now', async (c) => {
   // Prefer await for manual trigger so client gets real result; fall back to background
@@ -410,12 +449,25 @@ adminTools.post('/backup-now', async (c) => {
 });
 
 // POST /api/admin/tools/restore-from-backup
+// ?dry_run=1 — download + summarize only, no wipe/import
 // Safe path: download latest B2 backup → unwrap → applyImport with wipe guard
 // (refuses wipe if payload has no table arrays). Still does NOT restore B2 file bytes.
 adminTools.post('/restore-from-backup', async (c) => {
   const pid = c.get('patientId') || 1;
+  const dryRun = c.req.query('dry_run') === '1' || c.req.query('dry_run') === 'true';
   try {
     const state = await backup.restoreFromLatest(c.env);
+    if (dryRun) {
+      const summary = backup.summarizeBackupState(state);
+      return c.json({
+        ok: true,
+        dry_run: true,
+        message: 'Dry-run only — nothing written',
+        summary,
+        would_wipe: true,
+        patient_id: pid,
+      });
+    }
     const payload = { ...state, wipe: true };
     const result = await applyImport(c.env.DB, payload, pid);
     return c.json({

@@ -110,12 +110,17 @@ curl -X POST "$WORKER/api/admin/import" \
 ```
 
 Admin helpers:
+- `GET /api/admin/tools` — catalog of tools
 - `GET /api/admin/tools/auth-log`
 - `GET /api/admin/tools/schema-info`
 - `GET /api/admin/tools/backup-status` — last cron/manual backup
+- `GET /api/admin/tools/backups` — list `backups/` objects in B2
+- `POST /api/admin/tools/restore-from-backup?dry_run=1` — summarize latest backup without wipe
 - `GET /api/admin/tools/orphan-check?include_b2=1` — DB vs B2 key comparison  
 
 Admin SQL writes require `"allow_write": true` and are rate-limited.
+
+`APP_PIN` bootstrap seeds only **patient_id=1** by default. Set Worker var/secret `APP_PIN_ALL_PATIENTS=true` to seed every patient on first login.
 
 ## Multi-patient (family mode)
 

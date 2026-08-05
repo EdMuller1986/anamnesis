@@ -25,13 +25,20 @@ const PER_PATIENT_TABLE_NAMES = PER_PATIENT_TABLES.map((t) => t.name);
 /**
  * Canonical payload for hashing / restore (no volatile exported_at).
  */
+const VOLATILE_SETTING_KEYS = /^(last_backup_|last_ai_review_at_|auth_challenge_)/;
+
+function filterAppSettings(rows) {
+  return (rows || [])
+    .filter((r) => r?.key && !VOLATILE_SETTING_KEYS.test(r.key))
+    .sort((a, b) => String(a.key).localeCompare(String(b.key)));
+}
+
 export function stableBackupPayload(state) {
   // Drop volatile fields so unchanged medical data keeps the same hash
   if (!state || typeof state !== 'object') return state;
   const { exported_at, backup_errors, notes, ...rest } = state;
   if (rest.data && typeof rest.data === 'object') {
-    const { b2_file_manifest, ...dataRest } = rest.data;
-    // Keep manifest structure but sort keys for stable hash
+    const { b2_file_manifest, app_settings, ...dataRest } = rest.data;
     const manifest = b2_file_manifest
       ? {
           count: b2_file_manifest.count,
@@ -40,7 +47,14 @@ export function stableBackupPayload(state) {
           ),
         }
       : undefined;
-    return { ...rest, data: { ...dataRest, b2_file_manifest: manifest } };
+    return {
+      ...rest,
+      data: {
+        ...dataRest,
+        app_settings: filterAppSettings(app_settings),
+        b2_file_manifest: manifest,
+      },
+    };
   }
   return rest;
 }
@@ -314,18 +328,81 @@ export async function getFullState(db) {
     if (error) errors.push(error);
   }
 
+  // Device trust (needed for restore of known devices; no private keys here)
+  {
+    const { rows, error } = await selectAll(
+      db,
+      'SELECT * FROM known_devices ORDER BY id',
+      'known_devices'
+    );
+    results.known_devices = rows;
+    if (error) errors.push(error);
+  }
+
+  // WebAuthn public credentials (private key stays on authenticator)
+  {
+    const { rows, error } = await selectAll(
+      db,
+      `SELECT id, patient_id, device_id, credential_id, public_key, counter, transports,
+              backed_up, device_type, nickname, created_at, last_used_at
+       FROM webauthn_credentials ORDER BY id`,
+      'webauthn_credentials'
+    );
+    results.webauthn_credentials = rows;
+    if (error) errors.push(error);
+  }
+
+  // Recent audit sample (not full history — keep backup size sane)
+  {
+    const { rows, error } = await selectAll(
+      db,
+      'SELECT * FROM audit_log ORDER BY id DESC LIMIT 500',
+      'audit_log'
+    );
+    results.audit_log_recent = rows;
+    if (error) errors.push(error);
+  }
+
   // B2 object manifest (keys only — bytes stay in bucket; full DR needs bucket intact)
   results.b2_file_manifest = buildB2FileManifest(results);
 
   return {
-    version: '2.2.1',
+    version: '2.3.0',
     exported_at: new Date().toISOString(),
     scope: 'all_patients',
     data: results,
     backup_errors: errors.length ? errors : undefined,
     notes: {
       b2_files: 'manifest lists object keys from documents/vaccinations; file bytes are NOT embedded. Keep B2 bucket or copy keys separately.',
+      auth: 'known_devices + webauthn public credentials included; sessions/tokens are not.',
     },
+  };
+}
+
+/**
+ * Summarize backup payload without applying (for dry-run restore).
+ */
+export function summarizeBackupState(raw) {
+  const data = unwrapBackupState(raw) || {};
+  const tables = {};
+  let total = 0;
+  for (const [k, v] of Object.entries(data)) {
+    if (k === 'wipe' || k === '_backup_meta' || k === 'patient_id') continue;
+    if (Array.isArray(v)) {
+      tables[k] = v.length;
+      total += v.length;
+    } else if (v && typeof v === 'object' && k === 'b2_file_manifest') {
+      tables[k] = v.count ?? (v.files?.length ?? 0);
+    }
+  }
+  return {
+    version: raw?.version || data._backup_meta?.version || null,
+    exported_at: raw?.exported_at || data._backup_meta?.exported_at || null,
+    patient_id: raw?.patient_id ?? data.patient_id ?? null,
+    tables,
+    total_rows: total,
+    has_wipe_flag: data.wipe === true,
+    b2_manifest_count: data.b2_file_manifest?.count ?? tables.b2_file_manifest ?? null,
   };
 }
 
