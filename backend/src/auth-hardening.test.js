@@ -72,3 +72,11 @@ describe('backup getFullState ORDER BY', () => {
     expect(settings).toMatch(/ORDER BY key/);
   });
 });
+
+describe('restoreFromKey path validation', () => {
+  it('rejects unsafe keys', async () => {
+    const { restoreFromKey } = await import('./services/backup.js');
+    await expect(restoreFromKey({ BACKUP_ENCRYPTION_KEY: 'x' }, '../etc/passwd')).rejects.toThrow(/Invalid backup key/);
+    await expect(restoreFromKey({ BACKUP_ENCRYPTION_KEY: 'x' }, 'secrets/foo')).rejects.toThrow(/Invalid backup key/);
+  });
+});

@@ -115,7 +115,9 @@ Admin helpers:
 - `GET /api/admin/tools/schema-info`
 - `GET /api/admin/tools/backup-status` — last cron/manual backup
 - `GET /api/admin/tools/backups` — list `backups/` objects in B2
-- `POST /api/admin/tools/restore-from-backup?dry_run=1` — summarize latest backup without wipe
+- `POST /api/admin/tools/restore-from-backup?dry_run=1` — summarize backup without wipe
+- `POST /api/admin/tools/restore-from-backup?key=backups/….json.gz.enc` — restore from a listed object  
+  (writes a `pre-restore-*` snapshot first unless `skip_snapshot=1`)
 - `GET /api/admin/tools/orphan-check?include_b2=1` — DB vs B2 key comparison  
 
 Admin SQL writes require `"allow_write": true` and are rate-limited.

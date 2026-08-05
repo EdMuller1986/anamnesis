@@ -16,7 +16,7 @@ adminTools.get('/', async (c) => {
       { method: 'GET', path: '/backup-status' },
       { method: 'GET', path: '/backups' },
       { method: 'POST', path: '/backup-now', query: 'wait=1' },
-      { method: 'POST', path: '/restore-from-backup', query: 'dry_run=1' },
+      { method: 'POST', path: '/restore-from-backup', query: 'dry_run=1&key=backups/…&skip_snapshot=1' },
       { method: 'POST', path: '/sql', body: '{ sql, params?, allow_write? }' },
       { method: 'GET', path: '/search?q=' },
       { method: 'GET', path: '/ai-review' },
@@ -449,30 +449,44 @@ adminTools.post('/backup-now', async (c) => {
 });
 
 // POST /api/admin/tools/restore-from-backup
-// ?dry_run=1 — download + summarize only, no wipe/import
-// Safe path: download latest B2 backup → unwrap → applyImport with wipe guard
-// (refuses wipe if payload has no table arrays). Still does NOT restore B2 file bytes.
+// Query:
+//   dry_run=1 — download + summarize only
+//   key=backups/xxx.json.gz.enc — restore from a specific object (default: system/latest)
+//   skip_snapshot=1 — do not write pre-restore snapshot to B2
+// Still restores JSON metadata only (not B2 file bytes).
 adminTools.post('/restore-from-backup', async (c) => {
   const pid = c.get('patientId') || 1;
   const dryRun = c.req.query('dry_run') === '1' || c.req.query('dry_run') === 'true';
+  const skipSnapshot = c.req.query('skip_snapshot') === '1' || c.req.query('skip_snapshot') === 'true';
+  const key = c.req.query('key') || 'system/latest-backup.json.gz.enc';
+
   try {
-    const state = await backup.restoreFromLatest(c.env);
+    const { state, key: usedKey } = await backup.restoreFromKey(c.env, key);
     if (dryRun) {
       const summary = backup.summarizeBackupState(state);
       return c.json({
         ok: true,
         dry_run: true,
         message: 'Dry-run only — nothing written',
+        backup_key: usedKey,
         summary,
         would_wipe: true,
         patient_id: pid,
       });
     }
+
+    let snapshot = null;
+    if (!skipSnapshot) {
+      snapshot = await backup.snapshotBeforeRestore(c.env);
+    }
+
     const payload = { ...state, wipe: true };
     const result = await applyImport(c.env.DB, payload, pid);
     return c.json({
       ok: true,
-      message: 'Restore from latest B2 backup completed (metadata only; file blobs not re-uploaded)',
+      message: 'Restore completed (metadata only; file blobs not re-uploaded)',
+      backup_key: usedKey,
+      pre_restore_snapshot: snapshot,
       import_details: result,
     });
   } catch (err) {

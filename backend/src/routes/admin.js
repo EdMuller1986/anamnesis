@@ -539,6 +539,78 @@ export async function applyImport(db, rawBody, pid) {
     }
   }
 
+  // 16. Known devices (global family trust list — restore only on wipe)
+  if (wipe && Array.isArray(data.known_devices)) {
+    for (const d of data.known_devices) {
+      if (!d.device_id) continue;
+      const devicePatient = d.patient_id ?? pid;
+      batch.push(db.prepare(`
+        INSERT INTO known_devices (device_id, patient_id, label, first_seen_at, last_seen_at, last_ip, user_agent, revoked)
+        VALUES (?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')), ?, ?, ?)
+        ON CONFLICT(device_id, patient_id) DO UPDATE SET
+          label = COALESCE(excluded.label, known_devices.label),
+          last_seen_at = excluded.last_seen_at,
+          last_ip = excluded.last_ip,
+          user_agent = excluded.user_agent,
+          revoked = excluded.revoked
+      `).bind(
+        d.device_id,
+        devicePatient,
+        d.label || null,
+        d.first_seen_at || null,
+        d.last_seen_at || null,
+        d.last_ip || null,
+        d.user_agent || null,
+        d.revoked ? 1 : 0
+      ));
+    }
+    changeLog.push(`Restored ${data.known_devices.length} known_devices`);
+  }
+
+  // 17. WebAuthn credentials (public keys only; private keys stay on authenticators)
+  if (wipe && Array.isArray(data.webauthn_credentials)) {
+    for (const w of data.webauthn_credentials) {
+      if (!w.credential_id || !w.public_key) continue;
+      const wp = w.patient_id ?? pid;
+      batch.push(db.prepare(`
+        INSERT INTO webauthn_credentials (
+          patient_id, device_id, credential_id, public_key, counter, transports,
+          backed_up, device_type, nickname, created_at, last_used_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?)
+        ON CONFLICT(credential_id) DO UPDATE SET
+          counter = excluded.counter,
+          last_used_at = excluded.last_used_at,
+          nickname = COALESCE(excluded.nickname, webauthn_credentials.nickname)
+      `).bind(
+        wp,
+        w.device_id || 'unknown',
+        w.credential_id,
+        w.public_key,
+        w.counter || 0,
+        w.transports || null,
+        w.backed_up ? 1 : 0,
+        w.device_type || null,
+        w.nickname || null,
+        w.created_at || null,
+        w.last_used_at || null
+      ));
+    }
+    changeLog.push(`Restored ${data.webauthn_credentials.length} webauthn_credentials`);
+  }
+
+  // 18. app_settings (skip volatile keys)
+  if (wipe && Array.isArray(data.app_settings)) {
+    let n = 0;
+    for (const s of data.app_settings) {
+      if (!s.key || /^last_backup_|^last_ai_review_at_|^auth_challenge_/.test(s.key)) continue;
+      batch.push(db.prepare(
+        'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)'
+      ).bind(s.key, s.value));
+      n++;
+    }
+    if (n) changeLog.push(`Restored ${n} app_settings`);
+  }
+
   if (batch.length > 0) {
     await db.batch(batch);
   }

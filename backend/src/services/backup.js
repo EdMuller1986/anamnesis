@@ -225,25 +225,65 @@ async function computeHash(text) {
 }
 
 /**
- * Восстановление из последнего бэкапа в B2.
+ * Download + decrypt a backup object from B2.
+ * @param {string} [storagePath] default system/latest-backup.json.gz.enc
  */
-export async function restoreFromLatest(env) {
+export async function restoreFromKey(env, storagePath = 'system/latest-backup.json.gz.enc') {
   const password = env.BACKUP_ENCRYPTION_KEY;
-  const storagePath = 'system/latest-backup.json.gz.enc';
+  if (!password) throw new Error('BACKUP_ENCRYPTION_KEY not set');
+
+  // Prevent path traversal / arbitrary object reads outside backups/system
+  const key = String(storagePath || '').replace(/^\/+/, '');
+  if (!key || key.includes('..') || (!key.startsWith('backups/') && key !== 'system/latest-backup.json.gz.enc')) {
+    const err = new Error('Invalid backup key (must be system/latest-backup.json.gz.enc or backups/*)');
+    err.status = 400;
+    throw err;
+  }
 
   try {
-    const url = await b2.getDownloadUrl(env, storagePath);
+    const url = await b2.getDownloadUrl(env, key);
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`Failed to download backup: ${res.statusText}`);
+    if (!res.ok) throw new Error(`Failed to download backup ${key}: ${res.status} ${res.statusText}`);
     const encrypted = await res.arrayBuffer();
 
     const decrypted = await decryptData(encrypted, password);
     const json = await decompressData(decrypted);
     const state = JSON.parse(json);
-    return state;
+    return { state, key };
   } catch (err) {
     console.error('[Restore] Error:', err);
     throw err;
+  }
+}
+
+/** @deprecated use restoreFromKey */
+export async function restoreFromLatest(env) {
+  const { state } = await restoreFromKey(env, 'system/latest-backup.json.gz.enc');
+  return state;
+}
+
+/**
+ * Snapshot current D1 state to B2 before destructive restore.
+ * @returns {{ key: string } | { skipped: true, reason: string }}
+ */
+export async function snapshotBeforeRestore(env) {
+  const password = env.BACKUP_ENCRYPTION_KEY;
+  if (!password) return { skipped: true, reason: 'no encryption key' };
+
+  try {
+    const data = await getFullState(env.DB);
+    const json = JSON.stringify(data);
+    const compressed = await compressData(json);
+    const encrypted = await encryptData(compressed, password);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const key = `backups/pre-restore-${ts}.json.gz.enc`;
+    await b2.uploadFile(env, key, encrypted, 'application/octet-stream');
+    await b2.uploadFile(env, 'system/latest-backup.json.gz.enc', encrypted, 'application/octet-stream');
+    console.log('[Backup] pre-restore snapshot:', key);
+    return { key, size_bytes: encrypted.byteLength };
+  } catch (e) {
+    console.error('[Backup] pre-restore snapshot failed:', e);
+    return { skipped: true, reason: e.message };
   }
 }
 

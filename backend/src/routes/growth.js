@@ -72,6 +72,26 @@ growth.put('/:id', async (c) => {
   `).bind(measured_at, height_cm, weight_kg, head_circumference_cm, notes, id, patientId).all();
 
   if (results.length === 0) return c.json({ error: 'Not found' }, 404);
+
+  // If this is the latest measurement, keep patient profile in sync
+  const latest = await c.env.DB.prepare(
+    'SELECT id FROM growth_log WHERE patient_id = ? ORDER BY measured_at DESC LIMIT 1'
+  ).bind(patientId).first();
+  if (latest && Number(latest.id) === Number(id) && (height_cm != null || weight_kg != null)) {
+    const sets = ["updated_at = datetime('now')"];
+    const vals = [];
+    if (height_cm != null) {
+      sets.push('current_height_cm = ?');
+      vals.push(height_cm);
+    }
+    if (weight_kg != null) {
+      sets.push('current_weight_kg = ?');
+      vals.push(weight_kg);
+    }
+    vals.push(patientId);
+    await c.env.DB.prepare(`UPDATE patient SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+  }
+
   return c.json(results[0]);
 });
 
