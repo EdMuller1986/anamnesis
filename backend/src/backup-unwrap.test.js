@@ -6,6 +6,7 @@ import {
   bufferToBase64,
   base64ToBuffer,
   DEFAULT_FILE_PACK_LIMITS,
+  validateRestoreAgainstLive,
 } from './services/backup.js';
 
 describe('backup unwrap / stable payload', () => {
@@ -129,5 +130,50 @@ describe('backup unwrap / stable payload', () => {
   it('DEFAULT_FILE_PACK_LIMITS are conservative for Workers', () => {
     expect(DEFAULT_FILE_PACK_LIMITS.maxFiles).toBeLessThanOrEqual(50);
     expect(DEFAULT_FILE_PACK_LIMITS.maxTotalBytes).toBeLessThanOrEqual(30 * 1024 * 1024);
+  });
+
+  it('validateRestoreAgainstLive is non-destructive and reports delta', async () => {
+    const counts = { diagnoses: 2, timeline: 1 };
+    const db = {
+      prepare: (sql) => ({
+        bind: () => ({
+          first: async () => {
+            if (sql.includes('FROM diagnoses')) return { c: counts.diagnoses };
+            if (sql.includes('FROM timeline')) return { c: counts.timeline };
+            if (sql.includes('FROM patient')) return { c: 1 };
+            return { c: 0 };
+          },
+        }),
+      }),
+    };
+    const report = await validateRestoreAgainstLive(db, {
+      version: '2.4.0',
+      scope: 'all_patients',
+      data: {
+        patient: [{ id: 1, full_name: 'A' }],
+        diagnoses: [{ id: 1, name: 'X', patient_id: 1 }, { id: 2, name: 'Y', patient_id: 1 }],
+        timeline: [{ id: 1, title: 'Visit', patient_id: 1 }],
+      },
+    }, 1);
+
+    expect(report.writes).toBe(false);
+    expect(report.staging).toBe(true);
+    expect(report.ready).toBe(true);
+    expect(report.backup_counts.diagnoses).toBe(2);
+    expect(report.live_totals.diagnoses).toBe(2);
+    expect(report.delta.diagnoses.backup).toBe(2);
+  });
+
+  it('validateRestoreAgainstLive blocks empty backup', async () => {
+    const db = {
+      prepare: () => ({
+        bind: () => ({ first: async () => ({ c: 5 }) }),
+      }),
+    };
+    const report = await validateRestoreAgainstLive(db, {
+      data: { diagnoses: [], timeline: [] },
+    }, 1);
+    expect(report.ready).toBe(false);
+    expect(report.errors.length).toBeGreaterThan(0);
   });
 });

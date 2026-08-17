@@ -85,7 +85,24 @@ describe('D1 migrations on real SQLite', () => {
     const logCount = db.prepare('SELECT COUNT(*) AS c FROM auth_log').get().c;
     expect(logCount).toBe(1);
 
-    expect(applied.at(-1)).toMatch(/^0010_/);
+    expect(applied.at(-1)).toMatch(/^0011_/);
+
+    // Full audit trigger set (0011)
+    const triggers = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'audit_%'")
+      .all()
+      .map((r) => r.name);
+    expect(triggers.length).toBeGreaterThanOrEqual(36);
+
+    // Smoke: insert diagnosis writes audit_log
+    db.prepare(
+      `INSERT INTO diagnoses (name, status, patient_id) VALUES ('Asthma', 'active', 1)`
+    ).run();
+    const audit = db.prepare(
+      `SELECT entity_type, action FROM audit_log WHERE entity_type = 'diagnosis' ORDER BY id DESC LIMIT 1`
+    ).get();
+    expect(audit?.action).toBe('insert');
+    expect(audit?.entity_type).toBe('diagnosis');
   });
 
   it('refuses re-adding reminders.updated_at style conflict (0002 then no dup in later files)', () => {

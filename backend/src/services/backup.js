@@ -645,6 +645,138 @@ export function summarizeBackupState(raw) {
   };
 }
 
+const STAGING_COUNT_TABLES = [
+  'timeline', 'documents', 'diagnoses', 'medications', 'specialists',
+  'vaccinations', 'prescriptions', 'comments', 'plan', 'reminders',
+  'medical_errors', 'lab_results', 'growth_log', 'ai_requests',
+];
+
+/**
+ * Non-destructive "staging" check: compare backup payload to live D1 counts.
+ * Does not write. Use before wipe restore.
+ */
+export async function validateRestoreAgainstLive(db, rawState, sessionPid = 1) {
+  const data = unwrapBackupState(rawState) || {};
+  const summary = summarizeBackupState(rawState);
+  const warnings = [];
+  const errors = [];
+
+  // Patients referenced in backup
+  const patientIds = new Set();
+  if (Array.isArray(data.patient)) {
+    for (const p of data.patient) if (p?.id != null) patientIds.add(Number(p.id));
+  }
+  for (const t of STAGING_COUNT_TABLES) {
+    if (!Array.isArray(data[t])) continue;
+    for (const row of data[t]) {
+      if (row?.patient_id != null) patientIds.add(Number(row.patient_id));
+    }
+  }
+  if (patientIds.size === 0) patientIds.add(Number(sessionPid));
+
+  // Backup row counts (by table)
+  const backup_counts = {};
+  for (const t of STAGING_COUNT_TABLES) {
+    backup_counts[t] = Array.isArray(data[t]) ? data[t].length : 0;
+  }
+  backup_counts.patient = Array.isArray(data.patient) ? data.patient.length : 0;
+
+  // Live counts for affected patients
+  const live_by_patient = {};
+  for (const pid of patientIds) {
+    const counts = {};
+    for (const t of STAGING_COUNT_TABLES) {
+      try {
+        const row = await db.prepare(
+          `SELECT COUNT(*) AS c FROM ${t} WHERE patient_id = ?`
+        ).bind(pid).first();
+        counts[t] = Number(row?.c ?? row?.['COUNT(*)'] ?? 0);
+      } catch (e) {
+        counts[t] = null;
+        warnings.push(`live count failed for ${t}@${pid}: ${e.message}`);
+      }
+    }
+    try {
+      const prow = await db.prepare('SELECT COUNT(*) AS c FROM patient WHERE id = ?').bind(pid).first();
+      counts.patient = Number(prow?.c ?? 0);
+    } catch {
+      counts.patient = 0;
+    }
+    live_by_patient[pid] = counts;
+  }
+
+  // Aggregate live for comparison
+  const live_totals = {};
+  for (const t of [...STAGING_COUNT_TABLES, 'patient']) {
+    live_totals[t] = Object.values(live_by_patient).reduce(
+      (sum, c) => sum + (Number(c[t]) || 0),
+      0
+    );
+  }
+
+  const delta = {};
+  for (const t of Object.keys(backup_counts)) {
+    delta[t] = {
+      backup: backup_counts[t],
+      live: live_totals[t] ?? 0,
+      would_replace: true,
+    };
+  }
+
+  // Structural checks
+  const totalBackupRows = STAGING_COUNT_TABLES.reduce((s, t) => s + (backup_counts[t] || 0), 0);
+  if (totalBackupRows === 0) {
+    errors.push('Backup has no medical table rows — wipe restore would be refused');
+  }
+
+  // Sample required fields for common tables
+  const fieldChecks = [];
+  if (Array.isArray(data.diagnoses)) {
+    const bad = data.diagnoses.filter((d) => !d.name).length;
+    if (bad) fieldChecks.push({ table: 'diagnoses', missing_name: bad });
+  }
+  if (Array.isArray(data.timeline)) {
+    const bad = data.timeline.filter((e) => !e.title).length;
+    if (bad) fieldChecks.push({ table: 'timeline', missing_title: bad });
+  }
+  if (Array.isArray(data.documents)) {
+    const noPath = data.documents.filter((d) => !d.file_path).length;
+    if (noPath) warnings.push(`${noPath} document(s) missing file_path`);
+  }
+
+  if (summary.b2_embedded_files > 0) {
+    warnings.push(`Backup embeds ${summary.b2_embedded_files} file(s) — use restore_files=1 to re-upload`);
+  } else if ((summary.b2_manifest_count || 0) > 0) {
+    warnings.push(
+      `Backup lists ${summary.b2_manifest_count} B2 key(s) but no embedded bytes — files must already exist in bucket`
+    );
+  }
+
+  if (patientIds.size > 1 || data.scope === 'all_patients' || data._backup_meta?.scope === 'all_patients') {
+    warnings.push(`Multi-patient restore: patients [${[...patientIds].join(', ')}] will each be wiped & restored`);
+  }
+
+  const ready = errors.length === 0 && totalBackupRows > 0;
+
+  return {
+    ready,
+    staging: true,
+    writes: false,
+    summary,
+    patient_ids: [...patientIds],
+    backup_counts,
+    live_by_patient,
+    live_totals,
+    delta,
+    field_checks: fieldChecks,
+    warnings,
+    errors,
+    message: ready
+      ? 'Staging validation OK — nothing written. Apply with confirm WIPE when ready.'
+      : 'Staging validation found blocking issues — do not wipe-restore yet.',
+  };
+}
+
 /**
  * Build list of B2 keys referenced by DB rows (for backup integrity / restore checklist).
  */

@@ -16,6 +16,7 @@ adminTools.get('/', async (c) => {
       { method: 'GET', path: '/backup-status' },
       { method: 'GET', path: '/backups' },
       { method: 'POST', path: '/inspect-backup', body: '{ key? }' },
+      { method: 'POST', path: '/validate-restore', query: 'key=backups/…', body: '{ key? }' },
       { method: 'POST', path: '/backup-now', query: 'wait=1&include_files=1&force=1' },
       { method: 'POST', path: '/restore-from-backup', query: 'dry_run=1&key=backups/…&restore_files=1', body: '{"confirm":"WIPE"}' },
       { method: 'POST', path: '/sql', body: '{ sql, params?, allow_write? }' },
@@ -196,6 +197,37 @@ adminTools.post('/inspect-backup', async (c) => {
   }
 });
 
+// POST /api/admin/tools/validate-restore — staging check (no writes)
+// Compares backup vs live D1 counts; validates readiness before WIPE.
+// Body optional: { "key": "..." } or query ?key=
+adminTools.post('/validate-restore', async (c) => {
+  const pid = c.get('patientId') || 1;
+  let body = {};
+  try { body = await c.req.json(); } catch { /* empty */ }
+  const key = body.key || c.req.query('key') || 'system/latest-backup.json.gz.enc';
+
+  const rl = await checkRateLimit(c.env.DB, clientRateKey(c, 'admin-validate-restore'), {
+    windowSec: 60,
+    max: 15,
+  });
+  if (!rl.allowed) {
+    c.header('Retry-After', String(rl.retryAfterSec || 60));
+    return c.json({ error: 'Too many validate-restore requests', retry_after_sec: rl.retryAfterSec }, 429);
+  }
+
+  try {
+    const { state, key: usedKey } = await backup.restoreFromKey(c.env, key);
+    const report = await backup.validateRestoreAgainstLive(c.env.DB, state, pid);
+    return c.json({
+      ok: report.ready,
+      backup_key: usedKey,
+      ...report,
+    }, report.ready ? 200 : 422);
+  } catch (e) {
+    return c.json({ error: e.message }, e.status || 500);
+  }
+});
+
 // POST /api/admin/tools/sql — tight rate limit; block dangerous multi-statement / write without allow
 adminTools.post('/sql', async (c) => {
   const rl = await checkRateLimit(c.env.DB, clientRateKey(c, 'admin-sql'), {
@@ -288,12 +320,33 @@ adminTools.get('/schema-info', async (c) => {
   ];
   const missing = expected.filter((t) => !tables.includes(t));
 
+  let audit_triggers = [];
+  try {
+    const { results } = await db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'audit_%' ORDER BY name"
+    ).all();
+    audit_triggers = (results || []).map((r) => r.name);
+  } catch { /* ignore */ }
+
+  const expectedAuditPrefixes = [
+    'audit_timeline_', 'audit_documents_', 'audit_diagnoses_', 'audit_medications_',
+    'audit_prescriptions_', 'audit_plan_', 'audit_errors_', 'audit_labs_',
+    'audit_specialists_', 'audit_comments_', 'audit_vaccinations_', 'audit_growth_',
+    'audit_reminders_',
+  ];
+  // Expect at least insert+update+delete (3) per family except partial legacy names
+  const audit_ok = audit_triggers.length >= 30;
+
   return c.json({
     table_count: tables.length,
     tables,
     missing_expected: missing,
     d1_migrations: d1Migrations,
-    ok: missing.length === 0,
+    audit_triggers,
+    audit_trigger_count: audit_triggers.length,
+    audit_ok,
+    expected_audit_families: expectedAuditPrefixes,
+    ok: missing.length === 0 && audit_ok,
   });
 });
 
@@ -515,15 +568,18 @@ adminTools.post('/restore-from-backup', async (c) => {
     const { state, key: usedKey } = await backup.restoreFromKey(c.env, key);
     if (dryRun) {
       const summary = backup.summarizeBackupState(state);
+      const staging = await backup.validateRestoreAgainstLive(c.env.DB, state, pid);
       return c.json({
         ok: true,
         dry_run: true,
+        staging: true,
         message: 'Dry-run only — nothing written. To apply, POST again with body {"confirm":"WIPE"}'
           + (summary.b2_embedded_files
             ? `; backup has ${summary.b2_embedded_files} embedded file(s) — add restore_files=1 to re-upload`
             : ' (no embedded file bytes; metadata only)'),
         backup_key: usedKey,
         summary,
+        staging_report: staging,
         would_wipe: true,
         would_restore_files: restoreFiles,
         patient_id: pid,

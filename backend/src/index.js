@@ -300,13 +300,15 @@ app.get('/api/health', async (c) => {
   }
 });
 app.get('/api/version', (c) => c.json({
-  version: '2.4.0-serverless',
+  version: '2.5.0-serverless',
   features: {
     family_mode: true,
     backup_v2: true,
     backup_include_files: true,
     restore_confirm_wipe: true,
     restore_files: true,
+    validate_restore_staging: true,
+    audit_triggers_v2: true,
     pin_digits: 6,
   },
 }));

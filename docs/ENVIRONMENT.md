@@ -99,9 +99,13 @@ export B2_ENDPOINT=... B2_BUCKET_NAME=... B2_KEY_ID=... B2_APPLICATION_KEY=...
 node backend/scripts/migrate-from-sqlite.mjs /path/to/old.db --patient 1 \
   --uploads /path/to/uploads --basename-only --dry-run
 
-# Full migrate (optional --wipe)
+# Full migrate one patient (optional --wipe)
 node backend/scripts/migrate-from-sqlite.mjs /path/to/old.db --patient 1 \
-  --uploads /path/to/uploads --basename-only
+  --uploads /path/to/uploads --basename-only --wipe
+
+# All patients (family mode)
+node backend/scripts/migrate-from-sqlite.mjs /path/to/old.db --all-patients \
+  --uploads /path/to/uploads --basename-only --wipe
 ```
 
 Or step-by-step:
@@ -128,6 +132,8 @@ Admin helpers:
 - `GET /api/admin/tools/backup-status` — last cron/manual backup
 - `GET /api/admin/tools/backups` — list `backups/` objects in B2
 - `POST /api/admin/tools/inspect-backup` — decrypt + summarize without restore (`{ "key": "…" }`)
+- `POST /api/admin/tools/validate-restore` — **staging check** (no writes): backup vs live counts, readiness, warnings  
+  Prefer this (or `restore-from-backup?dry_run=1`) before any WIPE.
 - `POST /api/admin/tools/backup-now?wait=1` — run backup now  
   - `include_files=1` — embed B2 object bytes (base64) under size caps (~40 files / 5 MB each / 20 MB total)  
   - `force=1` — write even if content hash unchanged  
