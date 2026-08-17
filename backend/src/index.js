@@ -253,13 +253,63 @@ app.get('/api/health', async (c) => {
     if (!row || (row.ok !== 1 && row['1'] !== 1)) {
       return c.json({ status: 'degraded', db: 'error' }, 503);
     }
-    return c.json({ status: 'ok', db: 'connected' });
+
+    const detail = c.req.query('detail') === '1' || c.req.query('detail') === 'true';
+    if (!detail) {
+      return c.json({ status: 'ok', db: 'connected' });
+    }
+
+    // Extended health for ops (admin dashboards / monitoring)
+    const required = ['patient', 'sessions', 'app_settings', 'documents', 'timeline'];
+    const missing = [];
+    for (const t of required) {
+      try {
+        await c.env.DB.prepare(`SELECT 1 FROM ${t} LIMIT 1`).bind().first();
+      } catch {
+        missing.push(t);
+      }
+    }
+
+    let last_backup = null;
+    try {
+      const st = await c.env.DB.prepare(
+        "SELECT value FROM app_settings WHERE key = 'last_backup_status'"
+      ).bind().first();
+      if (st?.value) last_backup = JSON.parse(st.value);
+    } catch { /* ignore */ }
+
+    let backup_age_hours = null;
+    if (last_backup?.at) {
+      backup_age_hours = Math.round(
+        (Date.now() - new Date(last_backup.at).getTime()) / 3600000
+      );
+    }
+
+    const ok = missing.length === 0;
+    return c.json({
+      status: ok ? 'ok' : 'degraded',
+      db: 'connected',
+      schema: { missing_tables: missing, ok },
+      last_backup,
+      backup_age_hours,
+      backup_stale: backup_age_hours != null ? backup_age_hours > 36 : null,
+    }, ok ? 200 : 503);
   } catch (err) {
     console.error('[health] DB check failed:', err);
     return c.json({ status: 'error', db: 'disconnected', message: err.message }, 503);
   }
 });
-app.get('/api/version', (c) => c.json({ version: '2.0.0-serverless' }));
+app.get('/api/version', (c) => c.json({
+  version: '2.4.0-serverless',
+  features: {
+    family_mode: true,
+    backup_v2: true,
+    backup_include_files: true,
+    restore_confirm_wipe: true,
+    restore_files: true,
+    pin_digits: 6,
+  },
+}));
 app.route('/api/webauthn', webauthn);
 app.route('/api/auth', auth);
 

@@ -74,6 +74,41 @@ reminders.put('/:id', async (c) => {
   return c.json(results[0]);
 });
 
+// POST /api/reminders/:id/send-now — mark as sent + optional Telegram notify
+reminders.post('/:id/send-now', async (c) => {
+  const pid = c.get('patientId');
+  const id = c.req.param('id');
+
+  const existing = await c.env.DB.prepare(
+    'SELECT * FROM reminders WHERE id = ? AND patient_id = ?'
+  ).bind(id, pid).first();
+  if (!existing) return c.json({ error: 'Not found' }, 404);
+
+  const now = new Date().toISOString();
+  const { results } = await c.env.DB.prepare(`
+    UPDATE reminders
+    SET status = 'sent', sent_at = ?, updated_at = datetime('now')
+    WHERE id = ? AND patient_id = ?
+    RETURNING *
+  `).bind(now, id, pid).all();
+
+  let telegram = null;
+  try {
+    const tg = await import('../services/telegram.js');
+    const text = `<b>Напоминание</b>\n${existing.title || ''}`
+      + (existing.message ? `\n${existing.message}` : '')
+      + (existing.notes ? `\n\n${existing.notes}` : '');
+    telegram = await tg.sendMessage(c.env, text);
+  } catch (e) {
+    telegram = { ok: false, reason: e.message };
+  }
+
+  return c.json({
+    reminder: results[0],
+    telegram,
+  });
+});
+
 reminders.delete('/:id', async (c) => {
   const pid = c.get('patientId');
   const id = c.req.param('id');

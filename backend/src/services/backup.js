@@ -38,7 +38,8 @@ export function stableBackupPayload(state) {
   if (!state || typeof state !== 'object') return state;
   const { exported_at, backup_errors, notes, ...rest } = state;
   if (rest.data && typeof rest.data === 'object') {
-    const { b2_file_manifest, app_settings, ...dataRest } = rest.data;
+    // Strip base64 blobs; keep digests so file content still affects dedup hash
+    const { b2_file_manifest, b2_file_blobs, b2_file_pack_meta, app_settings, ...dataRest } = rest.data;
     const manifest = b2_file_manifest
       ? {
           count: b2_file_manifest.count,
@@ -47,16 +48,159 @@ export function stableBackupPayload(state) {
           ),
         }
       : undefined;
+    const blobDigests = Array.isArray(b2_file_blobs)
+      ? [...b2_file_blobs]
+          .map((b) => ({
+            key: b.key,
+            sha256: b.sha256 || null,
+            size: b.size ?? null,
+          }))
+          .sort((a, b) => String(a.key).localeCompare(String(b.key)))
+      : undefined;
     return {
       ...rest,
       data: {
         ...dataRest,
         app_settings: filterAppSettings(app_settings),
         b2_file_manifest: manifest,
+        b2_file_blob_digests: blobDigests,
       },
     };
   }
   return rest;
+}
+
+/** Default limits for embedding file bytes (Worker memory / Telegram size). */
+export const DEFAULT_FILE_PACK_LIMITS = {
+  maxFiles: 40,
+  maxBytesPerFile: 5 * 1024 * 1024,
+  maxTotalBytes: 20 * 1024 * 1024,
+};
+
+export function bufferToBase64(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+export function base64ToBuffer(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function sha256Hex(buffer) {
+  const hash = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Download referenced B2 objects and embed as base64 (size-capped).
+ * @returns {{ blobs: Array, meta: object }}
+ */
+export async function packFileBytes(env, manifest, limits = {}) {
+  const opts = { ...DEFAULT_FILE_PACK_LIMITS, ...limits };
+  const files = [...(manifest?.files || [])];
+  const blobs = [];
+  const skipped = [];
+  let totalBytes = 0;
+
+  for (const entry of files) {
+    if (blobs.length >= opts.maxFiles) {
+      skipped.push({ key: entry.key, reason: 'max_files' });
+      continue;
+    }
+    if (!entry?.key) continue;
+    try {
+      const { buffer, contentType, size } = await b2.downloadFileBytes(env, entry.key);
+      if (size > opts.maxBytesPerFile) {
+        skipped.push({ key: entry.key, reason: 'too_large', size });
+        continue;
+      }
+      if (totalBytes + size > opts.maxTotalBytes) {
+        skipped.push({ key: entry.key, reason: 'total_budget', size });
+        continue;
+      }
+      const sha256 = await sha256Hex(buffer);
+      blobs.push({
+        key: entry.key,
+        source: entry.source || null,
+        id: entry.id ?? null,
+        content_type: contentType,
+        size,
+        sha256,
+        base64: bufferToBase64(buffer),
+      });
+      totalBytes += size;
+    } catch (e) {
+      skipped.push({ key: entry.key, reason: 'download_failed', error: e.message });
+    }
+  }
+
+  return {
+    blobs,
+    meta: {
+      packed: blobs.length,
+      skipped: skipped.length,
+      skipped_details: skipped.slice(0, 50),
+      total_bytes: totalBytes,
+      limits: opts,
+    },
+  };
+}
+
+/**
+ * Re-upload embedded base64 blobs from a backup into B2.
+ */
+export async function restoreEmbeddedFiles(env, rawState) {
+  const data = unwrapBackupState(rawState) || {};
+  // Blobs may sit on unwrapped data or still under .data if pass-through
+  const blobs = Array.isArray(data.b2_file_blobs)
+    ? data.b2_file_blobs
+    : (Array.isArray(rawState?.data?.b2_file_blobs) ? rawState.data.b2_file_blobs : []);
+
+  const result = {
+    restored: 0,
+    failed: [],
+    total_bytes: 0,
+    available: blobs.length,
+  };
+
+  for (const blob of blobs) {
+    if (!blob?.key || !blob?.base64) {
+      result.failed.push({ key: blob?.key || '?', error: 'missing key/base64' });
+      continue;
+    }
+    try {
+      const buffer = base64ToBuffer(blob.base64);
+      if (blob.sha256) {
+        const got = await sha256Hex(buffer);
+        if (got !== blob.sha256) {
+          result.failed.push({ key: blob.key, error: 'sha256 mismatch' });
+          continue;
+        }
+      }
+      await b2.uploadFile(
+        env,
+        blob.key,
+        buffer,
+        blob.content_type || 'application/octet-stream'
+      );
+      result.restored += 1;
+      result.total_bytes += buffer.byteLength;
+    } catch (e) {
+      result.failed.push({ key: blob.key, error: e.message });
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -74,9 +218,11 @@ export function unwrapBackupState(raw) {
         ...nested,
         wipe: raw.wipe,
         patient_id: raw.patient_id ?? nested.patient_id,
+        scope: raw.scope || nested.scope,
         _backup_meta: {
           version: raw.version,
           exported_at: raw.exported_at,
+          scope: raw.scope || nested.scope,
         },
       };
     }
@@ -86,23 +232,46 @@ export function unwrapBackupState(raw) {
 
 /**
  * Главная функция бэкапа — all patients + global tables.
+ * @param {object} env
+ * @param {{ includeFiles?: boolean, filePackLimits?: object, force?: boolean }} [options]
+ *   includeFiles — embed B2 object bytes (base64) under size limits
+ *   force — skip content-hash dedup (always write a new object)
  */
-export async function runBackup(env) {
+export async function runBackup(env, options = {}) {
   const password = env.BACKUP_ENCRYPTION_KEY;
+  const includeFiles = options.includeFiles === true;
 
   if (!password) {
     console.error('[Backup] BACKUP_ENCRYPTION_KEY not set');
     await telegram.sendMessage(env, '<b>[CRITICAL] Ошибка бэкапа</b>\n\nНе задан <code>BACKUP_ENCRYPTION_KEY</code>.');
-    return;
+    return { ok: false, error: 'BACKUP_ENCRYPTION_KEY not set' };
   }
 
-try {
+  try {
     const data = await getFullState(env.DB);
     if (data.backup_errors?.length) {
       console.warn('[Backup] partial table errors:', data.backup_errors);
     }
 
-    // Dedup must ignore volatile fields (exported_at) and transient error notes
+    let filePackMeta = null;
+    if (includeFiles) {
+      const packed = await packFileBytes(
+        env,
+        data.data?.b2_file_manifest,
+        options.filePackLimits || {}
+      );
+      data.data.b2_file_blobs = packed.blobs;
+      data.data.b2_file_pack_meta = packed.meta;
+      filePackMeta = packed.meta;
+      data.notes = {
+        ...(data.notes || {}),
+        b2_files: packed.blobs.length
+          ? `Embedded ${packed.blobs.length} file(s) (${packed.meta.total_bytes} bytes); ${packed.meta.skipped} skipped`
+          : 'include_files requested but no files packed (empty manifest or all skipped)',
+      };
+    }
+
+    // Dedup must ignore volatile fields (exported_at) and base64 blob bodies
     const stableJson = JSON.stringify(stableBackupPayload(data));
     const fullJson = JSON.stringify(data);
 
@@ -114,13 +283,14 @@ try {
       console.warn('[Backup] could not read last_backup_hash:', e.message);
     }
 
-    if (lastHash && lastHash.value === newHash) {
+    if (!options.force && lastHash && lastHash.value === newHash) {
       console.log('[Backup] No changes detected, skipping backup');
       const skipped = {
         ok: true,
         skipped: true,
         reason: 'unchanged',
         at: new Date().toISOString(),
+        include_files: includeFiles,
       };
       try {
         await env.DB.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_backup_status', ?)")
@@ -130,7 +300,8 @@ try {
     }
 
     const dateStr = new Date().toISOString().slice(0, 10);
-    const fileName = `backups/anamnesis-backup-${dateStr}.json.gz.enc`;
+    const suffix = includeFiles ? '-with-files' : '';
+    const fileName = `backups/anamnesis-backup-${dateStr}${suffix}.json.gz.enc`;
 
     const compressed = await compressData(fullJson);
     const encrypted = await encryptData(compressed, password);
@@ -143,15 +314,27 @@ try {
     const warn = data.backup_errors?.length
       ? `\n⚠️ partial: ${data.backup_errors.length} table error(s)`
       : '';
-    const caption = `<b>[DAILY BACKUP]</b> ${dateStr} (${sizeMb} MB)${warn}`;
+    const filesNote = includeFiles
+      ? `\n📎 files: ${filePackMeta?.packed ?? 0} packed / ${filePackMeta?.skipped ?? 0} skipped`
+      : '';
+    const caption = `<b>[DAILY BACKUP]</b> ${dateStr} (${sizeMb} MB)${warn}${filesNote}`;
 
+    // Telegram Bot API document limit ~50 MB; skip attach if too large
+    const TG_DOC_LIMIT = 48 * 1024 * 1024;
     try {
-      const tg = await telegram.sendDocument(env, encrypted, `anamnesis-backup-${dateStr}.json.gz.enc`, caption);
-      if (!tg.ok) {
-        console.error('[Backup] Telegram sendDocument failed (B2 already saved):', tg);
+      if (encrypted.byteLength <= TG_DOC_LIMIT) {
+        const tg = await telegram.sendDocument(env, encrypted, `anamnesis-backup-${dateStr}${suffix}.json.gz.enc`, caption);
+        if (!tg.ok) {
+          console.error('[Backup] Telegram sendDocument failed (B2 already saved):', tg);
+          await telegram.sendMessage(
+            env,
+            `<b>[BACKUP]</b> Saved to B2 but Telegram document failed: <code>${tg.reason || 'unknown'}</code>`
+          );
+        }
+      } else {
         await telegram.sendMessage(
           env,
-          `<b>[BACKUP]</b> Saved to B2 but Telegram document failed: <code>${tg.reason || 'unknown'}</code>`
+          `${caption}\n\nFile too large for Telegram document (${sizeMb} MB) — stored on B2 only: <code>${fileName}</code>`
         );
       }
     } catch (tgErr) {
@@ -173,6 +356,8 @@ try {
       partial_errors: data.backup_errors || [],
       patient_count: data.data?.patient?.length ?? null,
       manifest_files: data.data?.b2_file_manifest?.count ?? null,
+      include_files: includeFiles,
+      file_pack: filePackMeta,
     };
     try {
       await env.DB.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_backup_status', ?)")
@@ -202,13 +387,16 @@ try {
 
 async function rotateBackups(env) {
   try {
-    const files = await b2.listFiles(env, 'backups/');
-    if (files.length <= 5) return;
+    // Keep daily backups + pre-restore snapshots; rotate oldest beyond keepN
+    const keepN = 10;
+    const files = await b2.listAllFiles(env, 'backups/');
+    if (files.length <= keepN) return;
 
     const sorted = files.sort((a, b) => new Date(a.LastModified) - new Date(b.LastModified));
-    const toDelete = sorted.slice(0, sorted.length - 5);
+    const toDelete = sorted.slice(0, sorted.length - keepN);
 
     for (const file of toDelete) {
+      // Prefer deleting old daily backups before pre-restore snapshots when equal age
       console.log(`[Backup] Rotating (deleting) old backup: ${file.Key}`);
       await b2.deleteFile(env, file.Key);
     }
@@ -403,17 +591,17 @@ export async function getFullState(db) {
     if (error) errors.push(error);
   }
 
-  // B2 object manifest (keys only — bytes stay in bucket; full DR needs bucket intact)
+  // B2 object manifest (keys only by default; use runBackup({ includeFiles: true }) to embed)
   results.b2_file_manifest = buildB2FileManifest(results);
 
   return {
-    version: '2.3.0',
+    version: '2.4.0',
     exported_at: new Date().toISOString(),
     scope: 'all_patients',
     data: results,
     backup_errors: errors.length ? errors : undefined,
     notes: {
-      b2_files: 'manifest lists object keys from documents/vaccinations; file bytes are NOT embedded. Keep B2 bucket or copy keys separately.',
+      b2_files: 'manifest lists object keys from documents/vaccinations. File bytes are NOT embedded unless backup-now?include_files=1.',
       auth: 'known_devices + webauthn public credentials included; sessions/tokens are not.',
     },
   };
@@ -424,10 +612,16 @@ export async function getFullState(db) {
  */
 export function summarizeBackupState(raw) {
   const data = unwrapBackupState(raw) || {};
+  // When raw still has nested data, also look for pack meta there
+  const nested = raw?.data && typeof raw.data === 'object' ? raw.data : {};
   const tables = {};
   let total = 0;
   for (const [k, v] of Object.entries(data)) {
     if (k === 'wipe' || k === '_backup_meta' || k === 'patient_id') continue;
+    if (k === 'b2_file_blobs') {
+      tables.b2_file_blobs = Array.isArray(v) ? v.length : 0;
+      continue;
+    }
     if (Array.isArray(v)) {
       tables[k] = v.length;
       total += v.length;
@@ -435,6 +629,9 @@ export function summarizeBackupState(raw) {
       tables[k] = v.count ?? (v.files?.length ?? 0);
     }
   }
+  const packMeta = data.b2_file_pack_meta || nested.b2_file_pack_meta || null;
+  const blobCount = tables.b2_file_blobs
+    ?? (Array.isArray(nested.b2_file_blobs) ? nested.b2_file_blobs.length : 0);
   return {
     version: raw?.version || data._backup_meta?.version || null,
     exported_at: raw?.exported_at || data._backup_meta?.exported_at || null,
@@ -443,6 +640,8 @@ export function summarizeBackupState(raw) {
     total_rows: total,
     has_wipe_flag: data.wipe === true,
     b2_manifest_count: data.b2_file_manifest?.count ?? tables.b2_file_manifest ?? null,
+    b2_embedded_files: blobCount || 0,
+    b2_file_pack_meta: packMeta,
   };
 }
 

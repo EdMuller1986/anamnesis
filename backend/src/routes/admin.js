@@ -114,29 +114,119 @@ admin.get('/state', async (c) => {
 
 // ─── POST /api/admin/import ─────────────────────────────────
 
+const PER_PATIENT_IMPORT_TABLES = [
+  'timeline', 'diagnoses', 'medications', 'specialists', 'lab_results',
+  'vaccinations', 'growth_log', 'plan', 'medical_errors', 'reminders',
+  'prescriptions', 'documents', 'comments', 'ai_requests', 'visit_diagnoses',
+];
+
+/**
+ * Family-mode backup may contain multiple patients. Partition rows by patient_id
+ * so wipe restore does not collapse everyone onto the active session chart.
+ */
+function partitionImportByPatient(data, fallbackPid) {
+  const fb = Number(fallbackPid) || 1;
+  const buckets = new Map();
+
+  const ensure = (id) => {
+    const n = Number(id);
+    if (!buckets.has(n)) {
+      buckets.set(n, {
+        wipe: true,
+        patient: [],
+        // globals restored once with first bucket
+        known_devices: null,
+        webauthn_credentials: null,
+        app_settings: null,
+        scope: data.scope,
+        _backup_meta: data._backup_meta,
+      });
+      for (const t of PER_PATIENT_IMPORT_TABLES) buckets.get(n)[t] = [];
+    }
+    return buckets.get(n);
+  };
+
+  // Seed from patient rows
+  const patientRows = Array.isArray(data.patient)
+    ? data.patient
+    : (data.patient && typeof data.patient === 'object' ? [data.patient] : []);
+  for (const p of patientRows) {
+    const id = p.id != null ? Number(p.id) : fb;
+    ensure(id).patient.push(p);
+  }
+
+  for (const t of PER_PATIENT_IMPORT_TABLES) {
+    if (!Array.isArray(data[t])) continue;
+    for (const row of data[t]) {
+      const id = row?.patient_id != null ? Number(row.patient_id) : fb;
+      ensure(id)[t].push(row);
+    }
+  }
+
+  if (buckets.size === 0) ensure(fb);
+
+  // Attach global tables to the first bucket only (restored once)
+  const first = buckets.values().next().value;
+  first.known_devices = data.known_devices;
+  first.webauthn_credentials = data.webauthn_credentials;
+  first.app_settings = data.app_settings;
+
+  return buckets;
+}
+
 /**
  * Shared import/restore application (used by POST /import and restore-from-backup).
- * @returns {{ ok: true, version, changes } | throws }
+ * Multi-patient wipe restores preserve each row's patient_id (family mode).
+ * @returns {{ ok: true, version, changes, patients? } | throws }
  */
 export async function applyImport(db, rawBody, pid) {
   const data = unwrapBackupState(rawBody) || {};
   const wipe = data.wipe === true;
-  const changeLog = [];
-  const batch = [];
 
   // Guard: wipe without any medical arrays would destroy data for nothing
   if (wipe) {
-    const hasAny = [
-      'timeline', 'diagnoses', 'medications', 'specialists', 'lab_results',
-      'vaccinations', 'growth_log', 'plan', 'medical_errors', 'reminders',
-      'prescriptions', 'documents', 'comments', 'ai_requests', 'visit_diagnoses',
-    ].some((k) => Array.isArray(data[k]) && data[k].length > 0);
+    const hasAny = PER_PATIENT_IMPORT_TABLES.some(
+      (k) => Array.isArray(data[k]) && data[k].length > 0
+    );
     if (!hasAny) {
       const err = new Error('Refusing wipe: import payload has no table arrays (check backup unwrap)');
       err.status = 400;
       throw err;
     }
   }
+
+  // Full backup / multi-chart: restore each patient separately with correct patient_id
+  if (wipe) {
+    const buckets = partitionImportByPatient(data, pid);
+    if (buckets.size > 1
+      || data.scope === 'all_patients'
+      || data._backup_meta?.scope === 'all_patients') {
+      const allChanges = [];
+      let lastVer = null;
+      const patients = [];
+      for (const [pId, subset] of buckets) {
+        const r = await applyImportSingle(db, subset, pId);
+        allChanges.push(...r.changes.map((c) => `[patient ${pId}] ${c}`));
+        lastVer = r.version;
+        patients.push(pId);
+      }
+      return {
+        ok: true,
+        version: lastVer,
+        changes: allChanges,
+        patients,
+        multi_patient: true,
+      };
+    }
+  }
+
+  return applyImportSingle(db, data, pid);
+}
+
+async function applyImportSingle(db, data, pid) {
+  const wipe = data.wipe === true;
+  const changeLog = [];
+  const batch = [];
 
   if (wipe) {
     // visit_diagnoses first (FK-ish), then dependents
@@ -150,7 +240,7 @@ export async function applyImport(db, rawBody, pid) {
     for (const t of tablesToWipe) {
       batch.push(db.prepare(`DELETE FROM ${t} WHERE patient_id = ?`).bind(pid));
     }
-    changeLog.push('Wiped existing patient-scoped data for full restore');
+    changeLog.push(`Wiped existing patient-scoped data for patient_id=${pid}`);
   }
 
   // 0. Patient profile (upsert active chart)
@@ -481,14 +571,22 @@ export async function applyImport(db, rawBody, pid) {
       } else if (wantsInsert(doc, wipe)) {
         if (doc.id && wipe) {
           batch.push(db.prepare(
-            `INSERT INTO documents (id, title, category, file_path, mime_type, notes, timeline_id, patient_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-          ).bind(doc.id, doc.title, doc.category || 'report', doc.file_path, doc.mime_type || null, doc.notes || null, doc.timeline_id || null, pid));
+            `INSERT INTO documents (id, title, category, file_path, mime_type, notes, timeline_id, patient_id, original_name, file_size, description)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(
+            doc.id, doc.title, doc.category || 'report', doc.file_path, doc.mime_type || null,
+            doc.notes || null, doc.timeline_id || null, pid,
+            doc.original_name || null, doc.file_size ?? null, doc.description || null
+          ));
         } else if (!doc.id) {
           batch.push(db.prepare(
-            `INSERT INTO documents (title, category, file_path, mime_type, notes, timeline_id, patient_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
-          ).bind(doc.title, doc.category || 'report', doc.file_path, doc.mime_type || null, doc.notes || null, doc.timeline_id || null, pid));
+            `INSERT INTO documents (title, category, file_path, mime_type, notes, timeline_id, patient_id, original_name, file_size, description)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(
+            doc.title, doc.category || 'report', doc.file_path, doc.mime_type || null,
+            doc.notes || null, doc.timeline_id || null, pid,
+            doc.original_name || null, doc.file_size ?? null, doc.description || null
+          ));
         }
         changeLog.push(`Added document meta: ${doc.title}`);
       }

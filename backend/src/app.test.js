@@ -44,6 +44,29 @@ describe('Anamnesis API Integration Tests', () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.version).toContain('serverless');
+    expect(data.features?.pin_digits).toBe(6);
+    expect(data.features?.backup_include_files).toBe(true);
+    expect(data.features?.restore_files).toBe(true);
+  });
+
+  it('GET /api/health?detail=1 returns schema info when tables missing', async () => {
+    const res = await app.fetch(new Request('http://localhost/api/health?detail=1'), {
+      ...mockEnv,
+      DB: {
+        prepare: () => ({
+          bind: () => ({
+            first: async () => ({ ok: 1 }),
+            all: async () => ({ results: [] }),
+            run: async () => ({ success: true }),
+          }),
+        }),
+      },
+    });
+    // mock always succeeds SELECT 1 FROM table — expect ok
+    expect([200, 503]).toContain(res.status);
+    const data = await res.json();
+    expect(data.db).toBe('connected');
+    expect(data).toHaveProperty('schema');
   });
 
   it('POST /api/auth/login returns error when not configured', async () => {

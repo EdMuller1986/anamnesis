@@ -104,6 +104,62 @@ describe('Admin Import/Restore Logic', () => {
     expect(inserts.some((i) => i.q.includes('id,') && i.args.includes(42))).toBe(true);
   });
 
+  it('POST /api/admin/import multi-patient wipe preserves patient_ids', async () => {
+    const deletes = [];
+    const diagInserts = [];
+    const dbWithSpy = {
+      prepare: (q) => ({
+        bind: (...args) => {
+          if (q.startsWith('DELETE FROM diagnoses')) deletes.push({ q, args });
+          if (q.startsWith('INSERT INTO diagnoses')) diagInserts.push({ q, args });
+          return {
+            all: () => Promise.resolve({ results: [] }),
+            first: () => {
+              if (q.includes('app_settings')) return Promise.resolve({ value: '1.0.0' });
+              return Promise.resolve(null);
+            },
+            run: () => Promise.resolve({ success: true, meta: { changes: 1 } }),
+          };
+        },
+      }),
+      batch: (queries) => Promise.resolve(queries.map(() => ({ success: true }))),
+    };
+
+    const payload = {
+      wipe: true,
+      scope: 'all_patients',
+      patient: [
+        { id: 1, full_name: 'Child A' },
+        { id: 2, full_name: 'Child B' },
+      ],
+      diagnoses: [
+        { id: 10, name: 'Dx A', status: 'active', patient_id: 1 },
+        { id: 20, name: 'Dx B', status: 'active', patient_id: 2 },
+      ],
+    };
+
+    const res = await app.fetch(new Request('http://localhost/api/admin/import', {
+      method: 'POST',
+      headers: {
+        'X-Admin-Token': 'test-admin-token',
+        'Content-Type': 'application/json',
+        'X-Patient-Id': '1',
+      },
+      body: JSON.stringify(payload),
+    }), { ...mockEnv, DB: dbWithSpy });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    // Both patients wiped
+    expect(deletes.some((d) => d.args.includes(1))).toBe(true);
+    expect(deletes.some((d) => d.args.includes(2))).toBe(true);
+    // Inserts keep original patient ids (last bind arg is patient_id)
+    const pids = diagInserts.map((i) => i.args[i.args.length - 1]);
+    expect(pids).toContain(1);
+    expect(pids).toContain(2);
+  });
+
   it('POST /api/admin/import refuses wipe with empty nested data', async () => {
     const res = await app.fetch(new Request('http://localhost/api/admin/import', {
       method: 'POST',

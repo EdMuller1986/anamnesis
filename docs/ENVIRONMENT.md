@@ -83,26 +83,38 @@ For local development:
 - Use `.env.example`, `wrangler.toml`, and `_redirects` as templates only (with placeholder values)
 - Store production secrets in Cloudflare Dashboard (Workers → Settings → **Secrets**, not plain Variables)
 - Use `wrangler secret put` for all sensitive keys
-- **Restore from backup** is re-enabled with guards (unwrap + refuse empty wipe). It restores **JSON metadata only** (not B2 file bytes). Auto-restore in CI remains off.
+- **Restore from backup** is re-enabled with guards (unwrap + refuse empty wipe). Metadata always; optional file re-upload when backup was made with `include_files=1`. Auto-restore in CI remains off.
 - CI runs `wrangler d1 migrations apply anamnesis-db --remote` **before** Worker deploy
 
 ## Migrating data from old SQLite (VPS)
 
-There is still no fully automated SQLite+uploads → D1+B2 migrator. Partial path:
+Orchestrated helper (export → optional B2 upload → import):
+
+```bash
+export WORKER_URL=https://your-backend.workers.dev
+export ADMIN_TOKEN=...
+export B2_ENDPOINT=... B2_BUCKET_NAME=... B2_KEY_ID=... B2_APPLICATION_KEY=...
+
+# Dry-run (no network import)
+node backend/scripts/migrate-from-sqlite.mjs /path/to/old.db --patient 1 \
+  --uploads /path/to/uploads --basename-only --dry-run
+
+# Full migrate (optional --wipe)
+node backend/scripts/migrate-from-sqlite.mjs /path/to/old.db --patient 1 \
+  --uploads /path/to/uploads --basename-only
+```
+
+Or step-by-step:
 
 ```bash
 # 1) Export tables to JSON (metadata only)
 node backend/scripts/export-sqlite-for-import.mjs /path/to/old.db --patient 1 > import.json
 
 # 2) Upload files from old backend/uploads to B2
-export B2_ENDPOINT=... B2_BUCKET_NAME=... B2_KEY_ID=... B2_APPLICATION_KEY=...
-# If D1 stores only UUID.ext keys (this fork):
 node backend/scripts/upload-uploads-to-b2.mjs /path/to/uploads --basename-only
-# Or preserve relative paths:
-# node backend/scripts/upload-uploads-to-b2.mjs /path/to/uploads
 
 # 3) Import into D1 (admin token)
-curl -X POST "$WORKER/api/admin/import" \
+curl -X POST "$WORKER_URL/api/admin/import" \
   -H "X-Admin-Token: $ADMIN_TOKEN" \
   -H "X-Patient-Id: 1" \
   -H "Content-Type: application/json" \
@@ -115,10 +127,25 @@ Admin helpers:
 - `GET /api/admin/tools/schema-info`
 - `GET /api/admin/tools/backup-status` — last cron/manual backup
 - `GET /api/admin/tools/backups` — list `backups/` objects in B2
+- `POST /api/admin/tools/inspect-backup` — decrypt + summarize without restore (`{ "key": "…" }`)
+- `POST /api/admin/tools/backup-now?wait=1` — run backup now  
+  - `include_files=1` — embed B2 object bytes (base64) under size caps (~40 files / 5 MB each / 20 MB total)  
+  - `force=1` — write even if content hash unchanged  
+  Daily cron still stores **metadata + file key manifest** only (keeps Telegram size sane).
+- `GET /api/health?detail=1` — schema + last backup age (public)
 - `POST /api/admin/tools/restore-from-backup?dry_run=1` — summarize backup without wipe
 - `POST /api/admin/tools/restore-from-backup?key=backups/….json.gz.enc` — restore from a listed object  
-  (writes a `pre-restore-*` snapshot first unless `skip_snapshot=1`)
+  Body required: `{"confirm":"WIPE"}`  
+  (writes a `pre-restore-*` snapshot first unless `skip_snapshot=1`; rate-limited)  
+  - `restore_files=1` — re-upload embedded `b2_file_blobs` to B2 (no-op if backup has none)
 - `GET /api/admin/tools/orphan-check?include_b2=1` — DB vs B2 key comparison  
+
+**Full DR with files:**  
+1. `POST .../backup-now?wait=1&include_files=1&force=1`  
+2. On disaster (after dry-run): `POST .../restore-from-backup?restore_files=1` + `{"confirm":"WIPE"}`  
+If files were never packed, restore recovers DB rows; re-upload uploads separately (`upload-uploads-to-b2.mjs` or live B2 copy).
+
+**Family mode:** full backups have `scope: all_patients`. Wipe restore partitions rows by `patient_id` and restores each chart separately (does not collapse everyone onto the active session patient).
 
 Admin SQL writes require `"allow_write": true` and are rate-limited.
 

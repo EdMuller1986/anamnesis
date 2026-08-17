@@ -217,12 +217,24 @@ webauthn.post('/login/verify', async (c) => {
 
     if (!verification.verified) {
       await authSession.recordAuthFailure(db, ip, deviceId, credentialRow.patient_id);
+      await authSession.logAuthEvent(db, {
+        patientId: credentialRow.patient_id,
+        event: 'webauthn_login_fail',
+        ip,
+        deviceId,
+      });
       return c.json({ error: 'Верификация не прошла' }, 401);
     }
 
     // Revoked devices must not regain access via passkey (and createSession must not clear revoke)
     if (await authSession.isDeviceRevoked(db, deviceId, credentialRow.patient_id)) {
       await deleteChallenge(db, `auth_${deviceId}`);
+      await authSession.logAuthEvent(db, {
+        patientId: credentialRow.patient_id,
+        event: 'webauthn_device_revoked',
+        ip,
+        deviceId,
+      });
       return c.json({ error: 'Это устройство было отозвано владельцем', device_revoked: true }, 403);
     }
 
@@ -234,6 +246,12 @@ webauthn.post('/login/verify', async (c) => {
     await authSession.resetAuthFailures(db, ip, deviceId);
 
     const token = await authSession.createSession(db, credentialRow.patient_id, ip, ua, deviceId);
+    await authSession.logAuthEvent(db, {
+      patientId: credentialRow.patient_id,
+      event: 'webauthn_login_ok',
+      ip,
+      deviceId,
+    });
     
     return c.json({
       token,

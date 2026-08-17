@@ -15,8 +15,9 @@ adminTools.get('/', async (c) => {
       { method: 'GET', path: '/auth-log' },
       { method: 'GET', path: '/backup-status' },
       { method: 'GET', path: '/backups' },
-      { method: 'POST', path: '/backup-now', query: 'wait=1' },
-      { method: 'POST', path: '/restore-from-backup', query: 'dry_run=1&key=backups/…&skip_snapshot=1' },
+      { method: 'POST', path: '/inspect-backup', body: '{ key? }' },
+      { method: 'POST', path: '/backup-now', query: 'wait=1&include_files=1&force=1' },
+      { method: 'POST', path: '/restore-from-backup', query: 'dry_run=1&key=backups/…&restore_files=1', body: '{"confirm":"WIPE"}' },
       { method: 'POST', path: '/sql', body: '{ sql, params?, allow_write? }' },
       { method: 'GET', path: '/search?q=' },
       { method: 'GET', path: '/ai-review' },
@@ -159,12 +160,39 @@ adminTools.get('/backup-status', async (c) => {
     if (row?.value) {
       try { status = JSON.parse(row.value); } catch { status = { raw: row.value }; }
     }
+    let age_hours = null;
+    if (status?.at) {
+      age_hours = Math.round((Date.now() - new Date(status.at).getTime()) / 3600000);
+    }
     return c.json({
       last_backup_status: status,
       last_backup_hash: hash?.value || null,
+      age_hours,
+      stale: age_hours != null ? age_hours > 36 : null,
     });
   } catch (e) {
     return c.json({ error: e.message }, 500);
+  }
+});
+
+// POST /api/admin/tools/inspect-backup — decrypt & summarize without restore
+// Body optional: { "key": "backups/..." } or query ?key=
+adminTools.post('/inspect-backup', async (c) => {
+  let body = {};
+  try { body = await c.req.json(); } catch { /* empty */ }
+  const key = body.key || c.req.query('key') || 'system/latest-backup.json.gz.enc';
+  try {
+    const { state, key: usedKey } = await backup.restoreFromKey(c.env, key);
+    const summary = backup.summarizeBackupState(state);
+    return c.json({
+      ok: true,
+      backup_key: usedKey,
+      summary,
+      notes: state.notes || null,
+      backup_errors: state.backup_errors || null,
+    });
+  } catch (e) {
+    return c.json({ error: e.message }, e.status || 500);
   }
 });
 
@@ -434,17 +462,29 @@ adminTools.get('/backups', async (c) => {
 });
 
 // POST /api/admin/tools/backup-now
+// Query:
+//   wait=1 — await result (recommended for include_files)
+//   include_files=1 — embed B2 object bytes (size-capped) into encrypted backup
+//   force=1 — write even if content hash unchanged
 adminTools.post('/backup-now', async (c) => {
-  // Prefer await for manual trigger so client gets real result; fall back to background
-  if (c.req.query('wait') === '1' || c.req.query('wait') === 'true') {
-    const result = await backup.runBackup(c.env);
+  const includeFiles = c.req.query('include_files') === '1' || c.req.query('include_files') === 'true';
+  const force = c.req.query('force') === '1' || c.req.query('force') === 'true';
+  const opts = { includeFiles, force };
+
+  // File packing is slow/memory-heavy — always await when include_files
+  const shouldWait = includeFiles
+    || c.req.query('wait') === '1'
+    || c.req.query('wait') === 'true';
+
+  if (shouldWait) {
+    const result = await backup.runBackup(c.env, opts);
     return c.json(result);
   }
   if (c.executionCtx?.waitUntil) {
-    c.executionCtx.waitUntil(backup.runBackup(c.env));
-    return c.json({ ok: true, message: 'Backup task started in background' });
+    c.executionCtx.waitUntil(backup.runBackup(c.env, opts));
+    return c.json({ ok: true, message: 'Backup task started in background', include_files: includeFiles });
   }
-  const result = await backup.runBackup(c.env);
+  const result = await backup.runBackup(c.env, opts);
   return c.json(result);
 });
 
@@ -453,12 +493,23 @@ adminTools.post('/backup-now', async (c) => {
 //   dry_run=1 — download + summarize only
 //   key=backups/xxx.json.gz.enc — restore from a specific object (default: system/latest)
 //   skip_snapshot=1 — do not write pre-restore snapshot to B2
-// Still restores JSON metadata only (not B2 file bytes).
+//   restore_files=1 — re-upload embedded b2_file_blobs (if present in backup)
+// Body (required unless dry_run): { "confirm": "WIPE" }
 adminTools.post('/restore-from-backup', async (c) => {
   const pid = c.get('patientId') || 1;
   const dryRun = c.req.query('dry_run') === '1' || c.req.query('dry_run') === 'true';
   const skipSnapshot = c.req.query('skip_snapshot') === '1' || c.req.query('skip_snapshot') === 'true';
+  const restoreFiles = c.req.query('restore_files') === '1' || c.req.query('restore_files') === 'true';
   const key = c.req.query('key') || 'system/latest-backup.json.gz.enc';
+
+  const rl = await checkRateLimit(c.env.DB, clientRateKey(c, 'admin-restore'), {
+    windowSec: 300,
+    max: 5,
+  });
+  if (!rl.allowed) {
+    c.header('Retry-After', String(rl.retryAfterSec || 300));
+    return c.json({ error: 'Too many restore attempts', retry_after_sec: rl.retryAfterSec }, 429);
+  }
 
   try {
     const { state, key: usedKey } = await backup.restoreFromKey(c.env, key);
@@ -467,12 +518,25 @@ adminTools.post('/restore-from-backup', async (c) => {
       return c.json({
         ok: true,
         dry_run: true,
-        message: 'Dry-run only — nothing written',
+        message: 'Dry-run only — nothing written. To apply, POST again with body {"confirm":"WIPE"}'
+          + (summary.b2_embedded_files
+            ? `; backup has ${summary.b2_embedded_files} embedded file(s) — add restore_files=1 to re-upload`
+            : ' (no embedded file bytes; metadata only)'),
         backup_key: usedKey,
         summary,
         would_wipe: true,
+        would_restore_files: restoreFiles,
         patient_id: pid,
       });
+    }
+
+    let body = {};
+    try { body = await c.req.json(); } catch { /* empty */ }
+    if (body.confirm !== 'WIPE') {
+      return c.json({
+        error: 'Destructive restore requires body: {"confirm":"WIPE"}',
+        hint: 'Run dry_run=1 first to inspect counts',
+      }, 400);
     }
 
     let snapshot = null;
@@ -482,12 +546,25 @@ adminTools.post('/restore-from-backup', async (c) => {
 
     const payload = { ...state, wipe: true };
     const result = await applyImport(c.env.DB, payload, pid);
+
+    let files_restored = null;
+    if (restoreFiles) {
+      files_restored = await backup.restoreEmbeddedFiles(c.env, state);
+    }
+
+    // Post-restore row counts for the active patient (sanity check)
+    const verification = await verifyPatientCounts(c.env.DB, pid);
+
     return c.json({
       ok: true,
-      message: 'Restore completed (metadata only; file blobs not re-uploaded)',
+      message: restoreFiles
+        ? 'Restore completed (metadata + embedded file re-upload attempted)'
+        : 'Restore completed (metadata only; pass restore_files=1 if backup has b2_file_blobs)',
       backup_key: usedKey,
       pre_restore_snapshot: snapshot,
       import_details: result,
+      files_restored,
+      verification,
     });
   } catch (err) {
     console.error('[Restore] Failed:', err);
@@ -495,5 +572,25 @@ adminTools.post('/restore-from-backup', async (c) => {
     return c.json({ error: 'Restore failed: ' + err.message }, status);
   }
 });
+
+/** Count key tables for post-restore verification. */
+async function verifyPatientCounts(db, pid) {
+  const tables = [
+    'timeline', 'documents', 'diagnoses', 'medications', 'specialists',
+    'vaccinations', 'prescriptions', 'comments', 'plan', 'reminders',
+  ];
+  const counts = {};
+  for (const t of tables) {
+    try {
+      const row = await db.prepare(
+        `SELECT COUNT(*) AS c FROM ${t} WHERE patient_id = ?`
+      ).bind(pid).first();
+      counts[t] = row?.c ?? row?.['COUNT(*)'] ?? 0;
+    } catch (e) {
+      counts[t] = { error: e.message };
+    }
+  }
+  return { patient_id: pid, counts };
+}
 
 export default adminTools;

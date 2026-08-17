@@ -93,6 +93,24 @@ export async function getDownloadUrl(env, fileName, friendlyName, mimeType) {
   return await getSignedUrl(client, command, { expiresIn: 3600 });
 }
 
+/**
+ * Download object bytes via presigned URL (Workers-friendly, no SDK stream parser).
+ * @returns {{ buffer: ArrayBuffer, contentType: string, size: number }}
+ */
+export async function downloadFileBytes(env, fileName) {
+  const url = await getDownloadUrl(env, fileName);
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`B2 download failed for ${fileName}: ${res.status} ${res.statusText}`);
+  }
+  const buffer = await res.arrayBuffer();
+  return {
+    buffer,
+    contentType: res.headers.get('Content-Type') || 'application/octet-stream',
+    size: buffer.byteLength,
+  };
+}
+
 export async function deleteFile(env, fileName) {
   const client = getS3Client(env);
   const command = new DeleteObjectCommand({
