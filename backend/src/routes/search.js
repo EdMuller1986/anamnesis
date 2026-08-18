@@ -32,14 +32,16 @@ search.get('/', async (c) => {
 
   try {
     const queries = [
-      { sql: "SELECT id, name as title, 'diagnosis' as _type FROM diagnoses WHERE patient_id = ? AND (name LIKE ? OR icd_code LIKE ? OR detail LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like, like] },
-      { sql: "SELECT id, full_name as title, 'specialist' as _type FROM specialists WHERE patient_id = ? AND (full_name LIKE ? OR specialization LIKE ? OR clinic LIKE ?) LIMIT 8", params: [pid, like, like, like] },
-      { sql: "SELECT id, name as title, 'medication' as _type FROM medications WHERE patient_id = ? AND (name LIKE ? OR dosage LIKE ? OR detail LIKE ?) LIMIT 8", params: [pid, like, like, like] },
-      { sql: "SELECT id, name as title, 'vaccination' as _type FROM vaccinations WHERE patient_id = ? AND (name LIKE ? OR vaccine_name LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
-      { sql: "SELECT id, parameter as title, 'lab_result' as _type FROM lab_results WHERE patient_id = ? AND (parameter LIKE ? OR test_name LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
-      { sql: "SELECT id, title, 'plan' as _type FROM plan WHERE patient_id = ? AND (title LIKE ? OR detail LIKE ? OR description LIKE ?) LIMIT 5", params: [pid, like, like, like] },
-      { sql: "SELECT id, title, 'timeline' as _type FROM timeline WHERE patient_id = ? AND (title LIKE ? OR description LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
-      { sql: "SELECT id, title, 'document' as _type FROM documents WHERE patient_id = ? AND (title LIKE ? OR original_name LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, name as title, name, 'diagnosis' as _type FROM diagnoses WHERE patient_id = ? AND (name LIKE ? OR icd_code LIKE ? OR detail LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like, like] },
+      { sql: "SELECT id, full_name as title, full_name as name, 'specialist' as _type FROM specialists WHERE patient_id = ? AND (full_name LIKE ? OR specialization LIKE ? OR clinic LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, name as title, name, 'medication' as _type FROM medications WHERE patient_id = ? AND (name LIKE ? OR dosage LIKE ? OR detail LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, name as title, name, 'vaccination' as _type FROM vaccinations WHERE patient_id = ? AND (name LIKE ? OR vaccine_name LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, parameter as title, parameter as name, 'lab_result' as _type FROM lab_results WHERE patient_id = ? AND (parameter LIKE ? OR test_name LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, title, title as name, 'plan' as _type FROM plan WHERE patient_id = ? AND (title LIKE ? OR detail LIKE ? OR description LIKE ?) LIMIT 5", params: [pid, like, like, like] },
+      { sql: "SELECT id, title, title as name, 'timeline' as _type FROM timeline WHERE patient_id = ? AND (title LIKE ? OR description LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, title, title as name, 'document' as _type FROM documents WHERE patient_id = ? AND (title LIKE ? OR original_name LIKE ? OR notes LIKE ?) LIMIT 8", params: [pid, like, like, like] },
+      { sql: "SELECT id, title, title as name, 'error' as _type FROM medical_errors WHERE patient_id = ? AND (title LIKE ? OR detail LIKE ? OR description LIKE ? OR notes LIKE ?) LIMIT 5", params: [pid, like, like, like, like] },
+      { sql: "SELECT id, title, title as name, 'reminder' as _type FROM reminders WHERE patient_id = ? AND (title LIKE ? OR message LIKE ? OR notes LIKE ?) LIMIT 5", params: [pid, like, like, like] },
     ];
 
     for (const qry of queries) {

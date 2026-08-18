@@ -16,12 +16,15 @@ history.get('/', async (c) => {
     query += ' AND created_at >= ?';
     params.push(since);
   }
+  // Fetch one extra row to compute has_more
   query += ' ORDER BY id DESC LIMIT ? OFFSET ?';
-  params.push(limit, offset);
+  params.push(limit + 1, offset);
 
   const { results } = await c.env.DB.prepare(query).bind(...params).all();
-
-  const rendered = await renderHistory(results);
+  const rows = results || [];
+  const page = rows.slice(0, limit);
+  const rendered = await renderHistory(page, { limit });
+  rendered.has_more = rows.length > limit;
   return c.json(rendered);
 });
 

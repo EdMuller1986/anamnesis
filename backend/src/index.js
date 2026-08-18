@@ -312,7 +312,7 @@ app.get('/api/health', async (c) => {
   }
 });
 app.get('/api/version', (c) => c.json({
-  version: '2.6.0-serverless',
+  version: '2.6.1-serverless',
   features: {
     family_mode: true,
     backup_v2: true,
@@ -322,6 +322,7 @@ app.get('/api/version', (c) => c.json({
     validate_restore_staging: true,
     audit_triggers_v2: true,
     restore_roundtrip_tested: true,
+    history_full_entity_render: true,
     pin_digits: 6,
   },
 }));

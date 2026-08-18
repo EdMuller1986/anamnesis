@@ -119,6 +119,9 @@ export default function HistoryModal() {
       case 'timeline':
         navigate(`/documents/visit/${ref_id}`);
         break;
+      case 'document':
+        navigate(`/documents/doc/${ref_id}`);
+        break;
       case 'plan':
         navigate(`/plan/${ref_id}`);
         break;
@@ -131,18 +134,22 @@ export default function HistoryModal() {
       case 'medication':
         navigate('/more/medications');
         break;
+      case 'specialist':
       case 'specialists':
         navigate('/more/specialists');
         break;
       case 'lab':
+      case 'lab_result':
         navigate('/more/labs');
         break;
+      case 'vaccination':
       case 'vaccinations':
         navigate('/more/vaccinations');
         break;
       case 'growth':
         navigate('/more/growth');
         break;
+      case 'reminder':
       case 'reminders':
         navigate('/more/reminders');
         break;

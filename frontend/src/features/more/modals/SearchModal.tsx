@@ -20,6 +20,8 @@ const ENTITY_ROUTES: Record<string, (id: number) => string> = {
   document: (id) => `/documents/doc/${id}`,
   vaccination: () => `/more/vaccinations`,
   reminder: () => `/more/reminders`,
+  lab_result: () => `/more/labs`,
+  growth: () => `/more/growth`,
 };
 
 const ENTITY_LABELS: Record<string, string> = {
@@ -33,6 +35,8 @@ const ENTITY_LABELS: Record<string, string> = {
   document: 'Документ',
   vaccination: 'Прививка',
   reminder: 'Напоминание',
+  lab_result: 'Анализ',
+  growth: 'Рост/вес',
 };
 
 export default function SearchModal() {

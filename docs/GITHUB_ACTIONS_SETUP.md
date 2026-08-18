@@ -79,7 +79,7 @@ wrangler secret put TELEGRAM_BOT_TOKEN --config wrangler.toml.local
 wrangler secret put TELEGRAM_CHAT_ID --config wrangler.toml.local
 ```
 
-**Note:** Auto-restore after deploy is **removed**. The restore API returns `503` until backup/restore is safely rewritten.
+**Note:** Auto-restore after deploy stays **off** (by design). Manual restore is available via `POST /api/admin/tools/restore-from-backup` with `{"confirm":"WIPE"}` — prefer `validate-restore` / `dry_run=1` first. See `docs/ENVIRONMENT.md` and root `TODO.md`.
 
 ---
 

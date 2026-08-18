@@ -29,6 +29,7 @@ export const EP = {
   webauthnAvailable: '/webauthn/available',
 
   // ── Patients ──────────────────────────────
+  patient: '/patient',
   patientList: '/patient/list',
   patientContext: '/patient-context',
 
