@@ -85,7 +85,7 @@ describe('D1 migrations on real SQLite', () => {
     const logCount = db.prepare('SELECT COUNT(*) AS c FROM auth_log').get().c;
     expect(logCount).toBe(1);
 
-    expect(applied.at(-1)).toMatch(/^0011_/);
+    expect(applied.at(-1)).toMatch(/^0012_/);
 
     // Full audit trigger set (0011)
     const triggers = db
@@ -103,6 +103,14 @@ describe('D1 migrations on real SQLite', () => {
     ).get();
     expect(audit?.action).toBe('insert');
     expect(audit?.entity_type).toBe('diagnosis');
+
+    // Dual-field patient sync (0012): insert with only name → full_name filled
+    db.prepare(
+      `INSERT INTO patient (id, name, birth_date) VALUES (2, 'Only Name', '2018-05-05')`
+    ).run();
+    const p2 = db.prepare('SELECT full_name, date_of_birth FROM patient WHERE id = 2').get();
+    expect(p2.full_name).toBe('Only Name');
+    expect(p2.date_of_birth).toBe('2018-05-05');
   });
 
   it('refuses re-adding reminders.updated_at style conflict (0002 then no dup in later files)', () => {

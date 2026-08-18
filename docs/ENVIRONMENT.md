@@ -84,7 +84,8 @@ For local development:
 - Store production secrets in Cloudflare Dashboard (Workers → Settings → **Secrets**, not plain Variables)
 - Use `wrangler secret put` for all sensitive keys
 - **Restore from backup** is re-enabled with guards (unwrap + refuse empty wipe). Metadata always; optional file re-upload when backup was made with `include_files=1`. Auto-restore in CI remains off.
-- CI runs `wrangler d1 migrations apply anamnesis-db --remote` **before** Worker deploy
+- CI runs `wrangler d1 migrations apply anamnesis-db --remote` **before** Worker deploy (Wrangler **4**, same major as local `package.json`)
+- Latest schema migrations include **0011** full audit triggers and **0012** dual patient name/DOB sync triggers
 
 ## Migrating data from old SQLite (VPS)
 

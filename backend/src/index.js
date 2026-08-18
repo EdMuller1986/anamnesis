@@ -285,11 +285,23 @@ app.get('/api/health', async (c) => {
       );
     }
 
-    const ok = missing.length === 0;
+    let audit_trigger_count = null;
+    try {
+      const { results } = await c.env.DB.prepare(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'audit_%'"
+      ).bind().all();
+      audit_trigger_count = (results || []).length;
+    } catch { /* ignore */ }
+
+    const schemaOk = missing.length === 0;
+    const auditOk = audit_trigger_count == null || audit_trigger_count >= 30;
+    const ok = schemaOk && auditOk;
     return c.json({
       status: ok ? 'ok' : 'degraded',
       db: 'connected',
-      schema: { missing_tables: missing, ok },
+      schema: { missing_tables: missing, ok: schemaOk },
+      audit_trigger_count,
+      audit_ok: auditOk,
       last_backup,
       backup_age_hours,
       backup_stale: backup_age_hours != null ? backup_age_hours > 36 : null,
@@ -300,7 +312,7 @@ app.get('/api/health', async (c) => {
   }
 });
 app.get('/api/version', (c) => c.json({
-  version: '2.5.0-serverless',
+  version: '2.6.0-serverless',
   features: {
     family_mode: true,
     backup_v2: true,
@@ -309,6 +321,7 @@ app.get('/api/version', (c) => c.json({
     restore_files: true,
     validate_restore_staging: true,
     audit_triggers_v2: true,
+    restore_roundtrip_tested: true,
     pin_digits: 6,
   },
 }));

@@ -16,7 +16,7 @@
 
 > AI-coordinated medical records tracker — a personal health PWA where an AI assistant does the heavy lifting of data entry, structuring, and cross-referencing, while you just scan documents and talk to it in plain language.
 
-**Status**: ⚠️ Dev prototype on Cloudflare (Workers + D1 + B2). **Not production-ready** — P0 security hardening in progress. Do not use with real medical data until isolation, auth, upload, and backup/restore are fixed (see `TODO.md`).
+**Status**: ⚠️ Hardened Cloudflare fork (Workers + D1 + B2). Core P0 items (auth, isolation, upload policy, backup/restore with WIPE guards, D1 migrations, audit triggers) are implemented and tested, but treat as **family-dev** until you have validated restore on *your* data. Original audit notes live in `TODO.md`.
 
 ## 🆓 Free Serverless Architecture
 

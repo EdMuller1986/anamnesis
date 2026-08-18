@@ -2,71 +2,12 @@
  * Real SQLite smoke: apply migrations, insert visit_diagnoses (no id), run getFullState.
  */
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
 import { getFullState, stableBackupPayload } from './services/backup.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const migrationsDir = join(__dirname, '..', 'migrations');
-
-function applyAllMigrations(db) {
-  const files = readdirSync(migrationsDir)
-    .filter((f) => /^\d{4}_.+\.sql$/i.test(f))
-    .sort();
-  db.exec('PRAGMA foreign_keys = OFF');
-  for (const name of files) {
-    db.exec(readFileSync(join(migrationsDir, name), 'utf8'));
-  }
-}
-
-/** Minimal D1-like adapter over node:sqlite */
-function d1Adapter(sqlite) {
-  return {
-    prepare(sql) {
-      return {
-        bind(...params) {
-          return this._bound(sql, params);
-        },
-        _bound(sql, params) {
-          return {
-            async all() {
-              const stmt = sqlite.prepare(sql);
-              const rows = params.length ? stmt.all(...params) : stmt.all();
-              return { results: rows };
-            },
-            async first() {
-              const stmt = sqlite.prepare(sql);
-              const row = params.length ? stmt.get(...params) : stmt.get();
-              return row ?? null;
-            },
-            async run() {
-              const stmt = sqlite.prepare(sql);
-              if (params.length) stmt.run(...params);
-              else stmt.run();
-              return { success: true, meta: { changes: 1 } };
-            },
-          };
-        },
-        all() {
-          return this._bound(sql, []).all();
-        },
-        first() {
-          return this._bound(sql, []).first();
-        },
-        run() {
-          return this._bound(sql, []).run();
-        },
-      };
-    },
-  };
-}
+import { openMigratedDb, d1Adapter } from './test-utils/sqlite-d1.js';
 
 describe('backup getFullState on real schema', () => {
   it('exports visit_diagnoses without ORDER BY id and produces stable hash', async () => {
-    const sqlite = new DatabaseSync(':memory:');
-    applyAllMigrations(sqlite);
+    const sqlite = openMigratedDb();
 
     sqlite.prepare(
       `INSERT INTO patient (id, name, full_name) VALUES (1, 'Test', 'Test User')`

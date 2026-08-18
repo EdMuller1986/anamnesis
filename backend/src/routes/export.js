@@ -79,19 +79,35 @@ exportRoute.get('/pdf', async (c) => {
 
   try {
     const [
-      patient, diagnoses, medications, timeline, plan, 
-      errors, specialists, vaccinations, growth, labResults
+      patient, diagnoses, medications, timeline, plan,
+      errors, specialists, vaccinations, growth, labResults, comments, prescriptions
     ] = await Promise.all([
       db.prepare('SELECT * FROM patient WHERE id = ?').bind(pid).first(),
       db.prepare('SELECT * FROM diagnoses WHERE patient_id = ? ORDER BY status ASC, created_at DESC').bind(pid).all(),
       db.prepare('SELECT * FROM medications WHERE patient_id = ? ORDER BY status ASC, created_at DESC').bind(pid).all(),
-      db.prepare('SELECT * FROM timeline WHERE patient_id = ? ORDER BY event_date DESC').bind(pid).all(),
+      // Resolve specialist name from join when specialist_name column empty
+      db.prepare(`
+        SELECT t.*, COALESCE(NULLIF(t.specialist_name, ''), s.full_name) AS specialist_display
+        FROM timeline t
+        LEFT JOIN specialists s ON s.id = t.specialist_id
+        WHERE t.patient_id = ?
+        ORDER BY t.event_date DESC
+      `).bind(pid).all(),
       db.prepare("SELECT * FROM plan WHERE patient_id = ? ORDER BY CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, id ASC").bind(pid).all(),
-      db.prepare("SELECT * FROM medical_errors WHERE patient_id = ? ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END, created_at DESC").bind(pid).all(),
+      db.prepare("SELECT * FROM medical_errors WHERE patient_id = ? ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'warning' THEN 3 WHEN 'medium' THEN 4 ELSE 5 END, created_at DESC").bind(pid).all(),
       db.prepare('SELECT * FROM specialists WHERE patient_id = ? ORDER BY specialization ASC').bind(pid).all(),
       db.prepare('SELECT * FROM vaccinations WHERE patient_id = ? ORDER BY scheduled_date ASC').bind(pid).all(),
       db.prepare('SELECT * FROM growth_log WHERE patient_id = ? ORDER BY measured_at DESC').bind(pid).all(),
-      db.prepare('SELECT * FROM lab_results WHERE patient_id = ? ORDER BY test_date DESC').bind(pid).all()
+      db.prepare('SELECT * FROM lab_results WHERE patient_id = ? ORDER BY test_date DESC').bind(pid).all(),
+      db.prepare('SELECT * FROM comments WHERE patient_id = ? ORDER BY created_at DESC LIMIT 30').bind(pid).all(),
+      db.prepare(`
+        SELECT pr.*, m.name AS medication_name
+        FROM prescriptions pr
+        LEFT JOIN medications m ON m.id = pr.medication_id
+        WHERE pr.patient_id = ?
+        ORDER BY pr.id DESC
+        LIMIT 30
+      `).bind(pid).all(),
     ]);
 
     if (!patient) return c.text('Patient not found', 404);
@@ -107,6 +123,8 @@ exportRoute.get('/pdf', async (c) => {
     const vaccinationsList = asList(vaccinations);
     const growthList = asList(growth);
     const labList = asList(labResults);
+    const commentsList = asList(comments);
+    const prescriptionsList = asList(prescriptions);
 
     const age = calcAge(patient.date_of_birth || patient.birth_date);
     const reportDate = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -268,15 +286,87 @@ exportRoute.get('/pdf', async (c) => {
             <tr>
                 <td style="width: 12%; white-space: nowrap;">${formatDate(t.event_date)}</td>
                 <td style="width: 25%"><strong>${esc(t.title)}</strong><br><small>${tr(timelineCategory, t.category)}</small></td>
-                <td style="width: 20%">${esc(t.specialist_name)}</td>
-                <td>${esc(t.description)}</td>
+                <td style="width: 20%">${esc(t.specialist_display || t.specialist_name)}</td>
+                <td>${esc(t.description)}${t.ai_assessment ? `<br><em style="color:#555;font-size:0.85em">AI: ${esc(String(t.ai_assessment).slice(0, 200))}${String(t.ai_assessment).length > 200 ? '…' : ''}</em>` : ''}</td>
             </tr>
         `).join('')}
         </tbody>
     </table>
 
+    ${errorsList.length > 0 ? `
+    <h2>Медицинские замечания / ошибки</h2>
+    <table>
+        <thead><tr><th>Дата</th><th>Заголовок</th><th>Серьёзность</th><th>Статус</th><th>Описание</th></tr></thead>
+        <tbody>
+        ${errorsList.map(e => `
+            <tr>
+                <td style="width: 12%">${formatDate(e.error_date || e.created_at)}</td>
+                <td style="width: 20%"><strong>${esc(e.title)}</strong></td>
+                <td style="width: 12%"><span class="status-badge ${e.severity === 'critical' || e.severity === 'high' ? 'status-urgent' : ''}">${tr(errorSeverity, e.severity) || esc(e.severity)}</span></td>
+                <td style="width: 12%">${tr(errorStatus, e.status) || esc(e.status)}</td>
+                <td>${esc(e.detail || e.description)}${e.resolution ? `<br><small>Решение: ${esc(e.resolution)}</small>` : ''}</td>
+            </tr>
+        `).join('')}
+        </tbody>
+    </table>
+    ` : ''}
+
+    ${growthList.length > 0 ? `
+    <h2>Рост и вес</h2>
+    <table>
+        <thead><tr><th>Дата</th><th>Рост (см)</th><th>Вес (кг)</th><th>ОГ (см)</th><th>Заметки</th></tr></thead>
+        <tbody>
+        ${growthList.slice(0, 15).map(g => `
+            <tr>
+                <td style="width: 15%">${formatDate(g.measured_at)}</td>
+                <td>${g.height_cm != null ? esc(g.height_cm) : '—'}</td>
+                <td>${g.weight_kg != null ? esc(g.weight_kg) : '—'}</td>
+                <td>${g.head_circumference_cm != null ? esc(g.head_circumference_cm) : '—'}</td>
+                <td>${esc(g.notes)}</td>
+            </tr>
+        `).join('')}
+        </tbody>
+    </table>
+    ` : ''}
+
+    ${prescriptionsList.length > 0 ? `
+    <h2>Курсы назначений (prescriptions)</h2>
+    <table>
+        <thead><tr><th>Препарат</th><th>Доза</th><th>Схема</th><th>Статус курса</th><th>Период</th></tr></thead>
+        <tbody>
+        ${prescriptionsList.map(pr => `
+            <tr>
+                <td><strong>${esc(pr.medication_name || ('#' + pr.medication_id))}</strong></td>
+                <td>${esc(pr.dosage)}</td>
+                <td>${esc(pr.frequency)}</td>
+                <td>${esc(pr.course_status)}</td>
+                <td style="white-space:nowrap">${formatDate(pr.start_date)}${pr.end_date ? ' — ' + formatDate(pr.end_date) : ''}</td>
+            </tr>
+        `).join('')}
+        </tbody>
+    </table>
+    ` : ''}
+
+    ${commentsList.length > 0 ? `
+    <h2>Комментарии (последние)</h2>
+    <table>
+        <thead><tr><th>Дата</th><th>Объект</th><th>Автор</th><th>Текст</th></tr></thead>
+        <tbody>
+        ${commentsList.map(cm => `
+            <tr>
+                <td style="width: 14%">${formatDateTime(cm.created_at)}</td>
+                <td style="width: 16%">${esc(cm.entity_type)} #${esc(cm.entity_id)}</td>
+                <td style="width: 12%">${esc(cm.author)}</td>
+                <td>${esc(cm.text)}</td>
+            </tr>
+        `).join('')}
+        </tbody>
+    </table>
+    ` : ''}
+
     <div class="footer">
         Сгенерировано системой Anamnesis Serverless. Не является медицинским заключением.
+        Пациент #${esc(pid)}.
     </div>
 </body>
 </html>`;

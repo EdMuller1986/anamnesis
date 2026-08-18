@@ -3,11 +3,14 @@ import { normalizePatient, normalizePatients } from '../services/patient-normali
 
 const patient = new Hono();
 
-// GET /api/patient/list
+// GET /api/patient/list — limited fields for chart switcher (not full medical dump)
 patient.get('/list', async (c) => {
-  const { results } = await c.env.DB.prepare(
-    'SELECT * FROM patient ORDER BY id'
-  ).all();
+  const { results } = await c.env.DB.prepare(`
+    SELECT id, name, full_name, birth_date, date_of_birth, gender, city,
+           current_height_cm, current_weight_kg, allergies, blood_type, updated_at
+    FROM patient
+    ORDER BY id
+  `).all();
   return c.json(normalizePatients(results));
 });
 
